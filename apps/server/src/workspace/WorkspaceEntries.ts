@@ -11,6 +11,8 @@ import * as Schema from "effect/Schema";
 import type {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
+  FilesystemSearchDirectoriesInput,
+  FilesystemSearchDirectoriesResult,
   ProjectEntry,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
@@ -25,6 +27,7 @@ import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as DirectorySearch from "./DirectorySearch.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
 
@@ -93,6 +96,9 @@ export class WorkspaceEntries extends Context.Service<
     readonly browse: (
       input: FilesystemBrowseInput,
     ) => Effect.Effect<FilesystemBrowseResult, WorkspaceEntriesBrowseError>;
+    readonly searchDirectories: (
+      input: FilesystemSearchDirectoriesInput,
+    ) => Effect.Effect<FilesystemSearchDirectoriesResult, WorkspaceEntriesBrowseError>;
     readonly list: (
       input: ProjectListEntriesInput,
     ) => Effect.Effect<ProjectListEntriesResult, WorkspaceEntriesError>;
@@ -137,6 +143,7 @@ export const make = Effect.gen(function* () {
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
   const vcsProcess = yield* VcsProcess.VcsProcess;
+  const directorySearch = yield* DirectorySearch.make;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
@@ -183,6 +190,26 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const readDirectory = (input: FilesystemBrowseInput, parentPath: string) =>
+    Effect.tryPromise({
+      try: () => NodeFSP.readdir(parentPath, { withFileTypes: true }),
+      catch: (cause) =>
+        new WorkspaceEntriesReadDirectoryError({
+          cwd: input.cwd,
+          partialPath: input.partialPath,
+          parentPath,
+          cause,
+        }),
+    }).pipe(
+      Effect.catchIf(
+        (error) => {
+          const code = (error.cause as NodeJS.ErrnoException | undefined)?.code;
+          return code === "EACCES" || code === "EPERM";
+        },
+        () => Effect.succeed([]),
+      ),
+    );
+
   const browse: WorkspaceEntries["Service"]["browse"] = Effect.fn("WorkspaceEntries.browse")(
     function* (input) {
       const resolvedInputPath = yield* resolveBrowseTarget(input, path);
@@ -190,24 +217,7 @@ export const make = Effect.gen(function* () {
       const parentPath = endsWithSeparator ? resolvedInputPath : path.dirname(resolvedInputPath);
       const prefix = endsWithSeparator ? "" : path.basename(resolvedInputPath);
 
-      const dirents = yield* Effect.tryPromise({
-        try: () => NodeFSP.readdir(parentPath, { withFileTypes: true }),
-        catch: (cause) =>
-          new WorkspaceEntriesReadDirectoryError({
-            cwd: input.cwd,
-            partialPath: input.partialPath,
-            parentPath,
-            cause,
-          }),
-      }).pipe(
-        Effect.catchIf(
-          (error) => {
-            const code = (error.cause as NodeJS.ErrnoException | undefined)?.code;
-            return code === "EACCES" || code === "EPERM";
-          },
-          () => Effect.succeed([]),
-        ),
-      );
+      const dirents = yield* readDirectory(input, parentPath);
 
       const showHidden = endsWithSeparator || prefix.startsWith(".");
       const lowerPrefix = prefix.toLowerCase();
@@ -231,6 +241,26 @@ export const make = Effect.gen(function* () {
       };
     },
   );
+
+  const searchDirectories: WorkspaceEntries["Service"]["searchDirectories"] = Effect.fn(
+    "WorkspaceEntries.searchDirectories",
+  )(function* (input) {
+    const browseInput = {
+      partialPath: input.directoryPath,
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+    };
+    const root = yield* resolveBrowseTarget(browseInput, path);
+    const dirents = yield* readDirectory(browseInput, root);
+    const entries = yield* directorySearch.search({
+      root,
+      childNames: dirents
+        .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith("."))
+        .map((dirent) => dirent.name),
+      query: input.query,
+      limit: input.limit ?? 20,
+    });
+    return { entries };
+  });
 
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
@@ -355,7 +385,14 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  return WorkspaceEntries.of({ browse, list, refresh, search, searchContents });
+  return WorkspaceEntries.of({
+    browse,
+    list,
+    refresh,
+    search,
+    searchContents,
+    searchDirectories,
+  });
 });
 
 export const layer = Layer.effect(WorkspaceEntries, make).pipe(

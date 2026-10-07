@@ -3,6 +3,7 @@ import type { CommandPaletteLinkedThreads } from "../commandPaletteBus";
 import {
   type EnvironmentId,
   type FilesystemBrowseEntry,
+  type FilesystemSearchDirectoriesEntry,
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
@@ -528,6 +529,8 @@ export function buildBrowseGroups(input: {
   directoryIcon: ReactNode;
   browseUp: () => void | Promise<void>;
   browseTo: (name: string) => void | Promise<void>;
+  /** Fuzzy matches deeper under the browsed directory; `browseTo` accepts their relative paths. */
+  searchEntries?: ReadonlyArray<FilesystemSearchDirectoriesEntry>;
 }): CommandPaletteGroup[] {
   const items: CommandPaletteActionItem[] = [];
 
@@ -559,7 +562,22 @@ export function buildBrowseGroups(input: {
     });
   }
 
-  return [{ value: "directories", label: "Directories", items }];
+  const groups: CommandPaletteGroup[] = [{ value: "directories", label: "Directories", items }];
+  const searchItems = (input.searchEntries ?? []).map((entry): CommandPaletteActionItem => ({
+    kind: "action",
+    value: `browse:${entry.fullPath}`,
+    searchTerms: [input.browseQuery, entry.fullPath, entry.relativePath],
+    title: entry.relativePath,
+    icon: input.directoryIcon,
+    keepOpen: true,
+    run: async () => {
+      await input.browseTo(entry.relativePath);
+    },
+  }));
+  if (searchItems.length > 0) {
+    groups.push({ value: "directory-search", label: "Matching folders", items: searchItems });
+  }
+  return groups;
 }
 
 export function filterPinnedBrowseEntries(input: {

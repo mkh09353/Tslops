@@ -37,6 +37,7 @@ import {
   type EnvironmentId,
   type EnvironmentMachineKind,
   type FilesystemBrowseResult,
+  type FilesystemSearchDirectoriesResult,
   type ProjectId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
@@ -115,7 +116,7 @@ import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
-import { useThreadSearch } from "../state/queries";
+import { useDebouncedValue, useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -226,6 +227,8 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+const EMPTY_DIRECTORY_SEARCH_ENTRIES: FilesystemSearchDirectoriesResult["entries"] = [];
+const DIRECTORY_SEARCH_DEBOUNCE_MS = 120;
 
 function getEnvironmentBrowsePlatform(os: string | null | undefined): string {
   if (os === "windows") {
@@ -1197,6 +1200,45 @@ function OpenCommandPaletteDialog(props: {
         : filterFilesystemBrowseEntries(browseEntries, browsePath.filterQuery),
     [browseEntries, browseEnvironmentPlatform, browsePath.filterQuery, pinnedCloneDirectoryName],
   );
+
+  // fff-backed fuzzy folder search under the browsed directory, so a repo can be
+  // found by name without knowing where it lives.
+  const directorySearchFilter = useDebouncedValue(
+    hasBrowseTarget && addProjectCloneFlow === null ? browsePath.filterQuery.trim() : "",
+    DIRECTORY_SEARCH_DEBOUNCE_MS,
+  );
+  const directorySearchQuery = useEnvironmentQuery(
+    browseAccess.canReadFiles && hasBrowseTarget && directorySearchFilter.length > 0
+      ? filesystemEnvironment.searchDirectories({
+          environmentId: browseEnvironmentId,
+          input: {
+            directoryPath: browsePath.directoryPath,
+            query: directorySearchFilter,
+            ...(currentProjectCwdForBrowse ? { cwd: currentProjectCwdForBrowse } : {}),
+          },
+        })
+      : null,
+  );
+  // Hold the last results while the next query loads so the group does not flash.
+  const [heldDirectorySearchEntries, setHeldDirectorySearchEntries] = useState(
+    EMPTY_DIRECTORY_SEARCH_ENTRIES,
+  );
+  const directorySearchData = directorySearchQuery.data?.entries ?? null;
+  if (directorySearchData !== null && directorySearchData !== heldDirectorySearchEntries) {
+    setHeldDirectorySearchEntries(directorySearchData);
+  }
+  const directorySearchEntries = useMemo(() => {
+    if (browsePath.filterQuery.trim().length === 0) return EMPTY_DIRECTORY_SEARCH_ENTRIES;
+    const shownPaths = new Set(visibleBrowseEntries.map((entry) => entry.fullPath));
+    return (directorySearchData ?? heldDirectorySearchEntries).filter(
+      (entry) => !shownPaths.has(entry.fullPath),
+    );
+  }, [
+    browsePath.filterQuery,
+    directorySearchData,
+    heldDirectorySearchEntries,
+    visibleBrowseEntries,
+  ]);
 
   const prefetchBrowsePath = useCallback(
     async (
@@ -2817,6 +2859,7 @@ function OpenCommandPaletteDialog(props: {
     directoryIcon: <FolderIcon className={ITEM_ICON_CLASS} />,
     browseUp,
     browseTo,
+    searchEntries: directorySearchEntries,
   });
   const cloneDestinationBrowseGroups = useMemo(
     () =>
