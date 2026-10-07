@@ -1,38 +1,40 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
-import * as NodeModule from "node:module";
 
-import type { FileFinder as FileFinderType } from "@ff-labs/fff-node";
 import type { FilesystemSearchDirectoriesEntry } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as Semaphore from "effect/Semaphore";
 
-// Loaded through `require` for the same single-executable reason as
-// WorkspaceSearchIndex.
-const requireForFff = NodeModule.createRequire(import.meta.url);
-const { FileFinder } = requireForFff("@ff-labs/fff-node") as typeof import("@ff-labs/fff-node");
-
-/** How long a query waits for shards it just created, so the first keystroke has results. */
-const FRESH_SHARD_WAIT_MS = 1_000;
-/** Shards do not watch the filesystem; a search rescans one in place once it is this old. */
-const SHARD_RESCAN_AFTER_MS = 5 * 60_000;
-/** Deepest relative depth matched from directory listings while a shard's first scan runs. */
-const NAME_WALK_MAX_DEPTH = 3;
-const NAME_WALK_MAX_LISTINGS = 200;
-/** Folders that hold installed software rather than projects; never indexed. */
+/** How long a query waits for a root's first walk, so the first keystroke has results. */
+const FIRST_WALK_WAIT = "1 second";
+/** Folder lists do not watch the filesystem; a search rewalks a root once its list is this old. */
+const REWALK_AFTER_MS = 5 * 60_000;
+const MAX_CACHED_ROOTS = 8;
+const MAX_WALK_DEPTH = 10;
+const MAX_FOLDERS_PER_ROOT = 200_000;
+const WALK_CONCURRENCY = 32;
+/** Folders that hold installed software rather than projects; never walked. */
 const SKIPPED_FOLDER_NAMES = new Set(["Applications", "Library", "node_modules"]);
-const DIRNAME_MATCH_TYPES = new Set(["exact_dirname", "fuzzy_dirname"]);
+/** macOS bundles look like folders but are never projects, and are slow to list from iCloud. */
+const BUNDLE_EXTENSION = /\.(app|framework|bundle|photoslibrary|musiclibrary|tvlibrary)$/i;
+/** Longest normalized name checked for typos; longer names still match exactly or by substring. */
+const MAX_TYPO_NAME_LENGTH = 128;
 
-interface Shard {
-  readonly finder: FileFinderType;
-  scannedAt: number;
+interface FolderList {
+  readonly relativePaths: Array<string>;
+  readonly names: Array<string>;
+  readonly depths: Array<number>;
+  readonly startedAt: number;
 }
 
-interface Candidate extends FilesystemSearchDirectoriesEntry {
-  readonly tier: number;
-  readonly depth: number;
-  readonly score: number;
+interface RootFolders {
+  list: FolderList;
+  walk: Fiber.Fiber<void> | null;
+  walking: boolean;
+  usedAt: number;
 }
 
 function normalizeName(input: string): string {
@@ -41,183 +43,191 @@ function normalizeName(input: string): string {
   return compact.length > 0 ? compact : lower;
 }
 
-function nameTier(name: string, normalizedQuery: string): number {
-  const normalizedName = normalizeName(name);
-  if (normalizedName === normalizedQuery) return 0;
-  if (normalizedName.startsWith(normalizedQuery)) return 1;
-  if (normalizedName.includes(normalizedQuery)) return 2;
-  return 3;
+/**
+ * Fewest single-letter edits (insert, delete, replace, or swap two neighbours)
+ * that turn `query` into some substring of `name`. Rows are reused across calls.
+ */
+function substringTypoDistance(query: string, name: string, rows: Array<Int32Array>): number {
+  let [beforePrevious, previous, current] = rows as [Int32Array, Int32Array, Int32Array];
+  previous.fill(0, 0, name.length + 1);
+  for (let i = 1; i <= query.length; i++) {
+    current[0] = i;
+    for (let j = 1; j <= name.length; j++) {
+      const replaceCost = query[i - 1] === name[j - 1] ? 0 : 1;
+      let distance = Math.min(
+        previous[j]! + 1,
+        current[j - 1]! + 1,
+        previous[j - 1]! + replaceCost,
+      );
+      if (i > 1 && j > 1 && query[i - 1] === name[j - 2] && query[i - 2] === name[j - 1]) {
+        distance = Math.min(distance, beforePrevious[j - 2]! + 1);
+      }
+      current[j] = distance;
+    }
+    [beforePrevious, previous, current] = [previous, current, beforePrevious];
+  }
+  let best = query.length;
+  for (let j = 0; j <= name.length; j++) best = Math.min(best, previous[j]!);
+  return best;
 }
 
-const listChildFolders = (directory: string) =>
+/** Higher is better; null when the name does not match. */
+function scoreName(name: string, query: string, rows: Array<Int32Array>): number | null {
+  if (name === query) return 1000;
+  if (name.startsWith(query)) return 900 - (name.length - query.length);
+  const index = name.indexOf(query);
+  if (index !== -1) return 800 - index - (name.length - query.length);
+  const allowedTypos = query.length >= 8 ? 2 : query.length >= 4 ? 1 : 0;
+  if (
+    allowedTypos === 0 ||
+    name.length < query.length - allowedTypos ||
+    name.length > MAX_TYPO_NAME_LENGTH
+  ) {
+    return null;
+  }
+  const typos = substringTypoDistance(query, name, rows);
+  if (typos > allowedTypos) return null;
+  return 600 - typos * 100 - Math.abs(name.length - query.length);
+}
+
+const listFolder = (directory: string) =>
   Effect.promise(() =>
     NodeFSP.readdir(directory, { withFileTypes: true }).then(
-      (dirents) =>
-        dirents
-          .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith("."))
+      (dirents) => ({
+        isRepository: dirents.some((dirent) => dirent.name === ".git"),
+        children: dirents
+          .filter(
+            (dirent) =>
+              dirent.isDirectory() &&
+              !dirent.name.startsWith(".") &&
+              !SKIPPED_FOLDER_NAMES.has(dirent.name) &&
+              !BUNDLE_EXTENSION.test(dirent.name),
+          )
           .map((dirent) => dirent.name),
-      () => [],
+      }),
+      () => ({ isRepository: false, children: [] }),
     ),
   );
 
 /**
- * Fuzzy folder search for the add-project picker, backed by fff.
+ * Typo-tolerant folder search for the add-project picker.
  *
- * Each child folder of the search root is indexed as its own shard, so a slow
- * folder such as an iCloud-synced `~/Documents` does not hold back the rest.
- * Shards are created on the first search, kept for the life of the server, and
- * rescanned in place when stale: fff's `destroy` neither stops a running scan
- * nor returns the index's memory, so rebuilding shards would cost more than
- * keeping them. A first scan can take minutes while iCloud fetches metadata;
- * until it finishes, folder names inside that shard are matched from directory
- * listings. fff only knows folders that directly hold files, which every
- * project root does.
+ * Each search root is walked once for folder names only, which stays small
+ * (tens of thousands of short paths) where an index of every file under `~`
+ * would hold hundreds of thousands. The walk does not descend into git
+ * repositories, since folders inside a project are not projects to add, and it
+ * skips app bundles, which can take minutes to list from iCloud. Searches see
+ * folders as soon as the walk finds them, and a stale list is rewalked in the
+ * background while the old one keeps answering.
  */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const shards = new Map<string, Shard>();
+  const scope = yield* Effect.scope;
+  const roots = new Map<string, RootFolders>();
 
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      for (const shard of shards.values()) {
-        try {
-          shard.finder.destroy();
-        } catch {
-          // Destroying an already-torn-down native index is harmless.
-        }
-      }
-      shards.clear();
-    }),
-  );
-
-  /** Returns the shard and whether this call created it. */
-  const acquireShard = Effect.fn("DirectorySearch.acquireShard")(function* (
-    shardPath: string,
-    now: number,
+  const walkFolders = Effect.fn("DirectorySearch.walkFolders")(function* (
+    root: string,
+    list: FolderList,
   ) {
-    const existing = shards.get(shardPath);
-    if (existing) {
-      if (now - existing.scannedAt > SHARD_RESCAN_AFTER_MS && !existing.finder.isScanning()) {
-        // Rescans run in the background and keep serving the previous results.
-        existing.scannedAt = now;
-        yield* Effect.try(() => existing.finder.scanFiles()).pipe(Effect.ignore);
-      }
-      return { shard: existing, fresh: false };
-    }
+    const permits = yield* Semaphore.make(WALK_CONCURRENCY);
+    const visit = (relativePath: string, depth: number): Effect.Effect<void> =>
+      permits
+        .withPermits(1)(listFolder(path.join(root, ...relativePath.split("/"))))
+        .pipe(
+          Effect.flatMap(({ isRepository, children }) => {
+            if ((depth > 0 && isRepository) || depth >= MAX_WALK_DEPTH) return Effect.void;
+            const childPaths: Array<string> = [];
+            for (const child of children) {
+              if (list.relativePaths.length >= MAX_FOLDERS_PER_ROOT) break;
+              const childPath = relativePath ? `${relativePath}/${child}` : child;
+              list.relativePaths.push(childPath);
+              list.names.push(normalizeName(child));
+              list.depths.push(depth + 1);
+              childPaths.push(childPath);
+            }
+            return Effect.forEach(childPaths, (childPath) => visit(childPath, depth + 1), {
+              concurrency: "unbounded",
+              discard: true,
+            });
+          }),
+        );
+    yield* visit("", 0);
+  });
 
-    const created = yield* Effect.try(() =>
-      FileFinder.create({
-        basePath: shardPath,
-        disableMmapCache: true,
-        disableContentIndexing: true,
-        disableWatch: true,
-        aiMode: false,
-        enableHomeDirScanning: true,
-      }),
-    ).pipe(Effect.orElseSucceed(() => null));
-    if (!created?.ok) return null;
-    const shard: Shard = { finder: created.value, scannedAt: now };
-    shards.set(shardPath, shard);
-    return { shard, fresh: true };
+  const startWalk = Effect.fn("DirectorySearch.startWalk")(function* (
+    root: string,
+    entry: RootFolders,
+    list: FolderList,
+  ) {
+    entry.walking = true;
+    entry.walk = yield* walkFolders(root, list).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          entry.list = list;
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          entry.walking = false;
+        }),
+      ),
+      Effect.forkIn(scope),
+    );
+  });
+
+  const emptyList = (startedAt: number): FolderList => ({
+    relativePaths: [],
+    names: [],
+    depths: [],
+    startedAt,
   });
 
   const search = Effect.fn("DirectorySearch.search")(function* (input: {
     readonly root: string;
-    readonly childNames: ReadonlyArray<string>;
     readonly query: string;
     readonly limit: number;
   }) {
-    const normalizedQuery = normalizeName(input.query);
     const now = yield* Clock.currentTimeMillis;
-    const candidates: Candidate[] = [];
-    const matchName = (relativePath: string, depth: number) => {
-      const segments = relativePath.split("/");
-      const tier = nameTier(segments.at(-1) ?? relativePath, normalizedQuery);
-      if (tier < 3) {
-        candidates.push({
-          relativePath,
-          fullPath: path.join(input.root, ...segments),
-          tier,
-          depth,
-          score: 0,
-        });
+    let entry = roots.get(input.root);
+    if (!entry) {
+      entry = { list: emptyList(now), walk: null, walking: false, usedAt: now };
+      roots.set(input.root, entry);
+      if (roots.size > MAX_CACHED_ROOTS) {
+        const [oldestRoot, oldest] = [...roots].reduce((left, right) =>
+          right[1].usedAt < left[1].usedAt ? right : left,
+        );
+        roots.delete(oldestRoot);
+        if (oldest.walk) yield* Fiber.interrupt(oldest.walk).pipe(Effect.forkIn(scope));
       }
-    };
-
-    const active: Array<{ readonly relativePath: string; readonly shard: Shard }> = [];
-    const freshShards: Shard[] = [];
-    for (const name of input.childNames) {
-      matchName(name, 1);
-      if (SKIPPED_FOLDER_NAMES.has(name)) continue;
-      const acquired = yield* acquireShard(path.join(input.root, name), now);
-      if (!acquired) continue;
-      active.push({ relativePath: name, shard: acquired.shard });
-      if (acquired.fresh) freshShards.push(acquired.shard);
-    }
-
-    if (freshShards.length > 0) {
-      yield* Effect.promise(() =>
-        Promise.all(freshShards.map((shard) => shard.finder.waitForScan(FRESH_SHARD_WAIT_MS))),
-      );
-    }
-
-    let walk: Array<string> = [];
-    for (const { relativePath, shard } of active) {
-      if (shard.finder.isScanning()) {
-        walk.push(relativePath);
-        continue;
+      yield* startWalk(input.root, entry, entry.list);
+      if (entry.walk) {
+        yield* Fiber.join(entry.walk).pipe(Effect.timeoutOption(FIRST_WALK_WAIT), Effect.exit);
       }
-      const result = yield* Effect.try(() =>
-        shard.finder.directorySearch(input.query, { pageSize: input.limit }),
-      ).pipe(Effect.orElseSucceed(() => null));
-      if (!result?.ok) continue;
-      result.value.items.forEach((item, index) => {
-        const score = result.value.scores[index];
-        const relativeToShard = item.relativePath.replaceAll("\\", "/").replace(/\/$/, "");
-        if (!relativeToShard || !score || !DIRNAME_MATCH_TYPES.has(score.matchType)) return;
-        const segments = relativeToShard.split("/");
-        candidates.push({
-          relativePath: `${relativePath}/${relativeToShard}`,
-          fullPath: path.join(input.root, relativePath, ...segments),
-          tier: nameTier(segments.at(-1) ?? relativeToShard, normalizedQuery),
-          depth: 1 + segments.length,
-          score: score.total,
-        });
-      });
+    } else if (!entry.walking && now - entry.list.startedAt > REWALK_AFTER_MS) {
+      yield* startWalk(input.root, entry, emptyList(now));
     }
+    entry.usedAt = now;
 
-    // Shards still on their first scan return nothing, so match names inside them from listings.
-    let listings = 0;
-    for (let depth = 2; depth <= NAME_WALK_MAX_DEPTH && walk.length > 0; depth++) {
-      const parents = walk.slice(0, NAME_WALK_MAX_LISTINGS - listings);
-      listings += parents.length;
-      const children = yield* Effect.forEach(
-        parents,
-        (parent) =>
-          listChildFolders(path.join(input.root, ...parent.split("/"))).pipe(
-            Effect.map((names) => names.map((name) => `${parent}/${name}`)),
-          ),
-        { concurrency: 16 },
-      );
-      walk = [];
-      for (const child of children.flat()) {
-        matchName(child, depth);
-        if (!SKIPPED_FOLDER_NAMES.has(child.split("/").at(-1) ?? child)) walk.push(child);
-      }
+    const { relativePaths, names, depths } = entry.list;
+    const query = normalizeName(input.query);
+    const rows = Array.from({ length: 3 }, () => new Int32Array(MAX_TYPO_NAME_LENGTH + 1));
+    const matches: Array<{ readonly index: number; readonly score: number }> = [];
+    for (let index = 0; index < names.length; index++) {
+      const score = scoreName(names[index]!, query, rows);
+      // Shallower folders win ties, so `~/Code/app` beats `~/Code/app/packages/app`.
+      if (score !== null) matches.push({ index, score: score - depths[index]! });
     }
-
-    // Name matches rank shallow-first; typo-tolerant fff matches rank by score.
-    return candidates
+    return matches
       .toSorted(
         (left, right) =>
-          left.tier - right.tier ||
-          (left.tier < 3
-            ? left.depth - right.depth || right.score - left.score
-            : right.score - left.score || left.depth - right.depth) ||
-          left.relativePath.localeCompare(right.relativePath),
+          right.score - left.score ||
+          relativePaths[left.index]!.localeCompare(relativePaths[right.index]!),
       )
       .slice(0, input.limit)
-      .map(({ relativePath, fullPath }) => ({ relativePath, fullPath }));
+      .map(({ index }): FilesystemSearchDirectoriesEntry => ({
+        relativePath: relativePaths[index]!,
+        fullPath: path.join(input.root, ...relativePaths[index]!.split("/")),
+      }));
   });
 
   return { search };

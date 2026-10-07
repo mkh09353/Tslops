@@ -250,12 +250,10 @@ export const make = Effect.gen(function* () {
       ...(input.cwd ? { cwd: input.cwd } : {}),
     };
     const root = yield* resolveBrowseTarget(browseInput, path);
-    const dirents = yield* readDirectory(browseInput, root);
+    // Reports a missing or unreadable root the same way browsing it would.
+    yield* readDirectory(browseInput, root);
     const entries = yield* directorySearch.search({
       root,
-      childNames: dirents
-        .filter((dirent) => dirent.isDirectory() && !dirent.name.startsWith("."))
-        .map((dirent) => dirent.name),
       query: input.query,
       limit: input.limit ?? 20,
     });

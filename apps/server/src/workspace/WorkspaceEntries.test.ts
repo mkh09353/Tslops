@@ -838,34 +838,30 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
         const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
         const root = yield* makeTempDir({ prefix: "t3code-workspace-search-directories-" });
-        // fff indexes folders that hold files, as real project roots do.
-        yield* writeTextFile(root, "Code/t3code/package.json", "{}");
+        yield* writeTextFile(root, "Code/t3code/.git/HEAD", "ref: refs/heads/main\n");
         yield* writeTextFile(root, "Code/t3code/apps/server/index.ts", "export {};\n");
-        yield* writeTextFile(root, "Code/t3code/apps/web/index.ts", "export {};\n");
         yield* writeTextFile(root, "Code/other/src/index.ts", "export {};\n");
-        yield* writeTextFile(root, "codex-claude/package.json", "{}");
         yield* writeTextFile(root, "codex-claude/src/index.ts", "export {};\n");
         yield* writeTextFile(root, ".hidden/t3code/index.ts", "export {};\n");
+        yield* fileSystem.makeDirectory(path.join(root, "Empty-Project"), { recursive: true });
         const directoryPath = yield* appendSeparator(root);
+        const search = (query: string) =>
+          workspaceEntries
+            .searchDirectories({ directoryPath, query })
+            .pipe(Effect.map((result) => result.entries.map((entry) => entry.relativePath)));
 
-        const nested = yield* workspaceEntries.searchDirectories({
-          directoryPath,
-          query: "t3code",
-        });
-        // Folders inside a match only match through their path, so they are left out.
-        expect(nested.entries).toEqual([
-          { relativePath: "Code/t3code", fullPath: path.join(root, "Code", "t3code") },
-        ]);
-
-        const topLevel = yield* workspaceEntries.searchDirectories({
-          directoryPath,
-          query: "codexclaude",
-        });
-        expect(topLevel.entries[0]).toEqual({
-          relativePath: "codex-claude",
-          fullPath: path.join(root, "codex-claude"),
-        });
+        expect(yield* search("t3code")).toEqual(["Code/t3code"]);
+        expect(yield* search("t3cdoe")).toEqual(["Code/t3code"]);
+        expect((yield* search("codexclaude"))[0]).toBe("codex-claude");
+        expect(yield* search("emptyproject")).toEqual(["Empty-Project"]);
+        // Folders inside a git repository are not projects to add.
+        expect(yield* search("server")).toEqual([]);
+        expect(yield* search("src")).toEqual(["codex-claude/src", "Code/other/src"]);
+        expect(
+          (yield* workspaceEntries.searchDirectories({ directoryPath, query: "t3code" })).entries,
+        ).toEqual([{ relativePath: "Code/t3code", fullPath: path.join(root, "Code", "t3code") }]);
       }),
     );
   });
