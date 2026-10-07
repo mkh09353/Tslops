@@ -22,6 +22,10 @@ const GAP = 12;
 // Minimum space between chat and the workspace card. Chat stays centered while
 // the card fits beside it with this much room.
 export const DETAILS_CARD_CLEARANCE = 32;
+// Chat wider than BASE_CHAT_WIDTH keeps at least this margin from the canvas
+// edges. At or below the base, the older shift-then-narrow rules take over.
+const CHAT_MARGIN = 64;
+const BASE_CHAT_WIDTH = 736;
 
 /** Pure geometry shared by the conversation, composer, workspace card, and floating preview. */
 export function resolveChatCanvasLayout({
@@ -41,13 +45,20 @@ export function resolveChatCanvasLayout({
   composerHeight?: number;
   detailsCard?: PreviewMiniPlayerObstacles["detailsCard"];
 }) {
-  const centeredWidth = Math.max(0, Math.min(maxChatWidth, container.width - padding * 2));
-  // A workspace card that does not fit beside the centered chat first moves
-  // chat left, only as far as it needs. Chat narrows only after it reaches the
-  // left padding.
   const laneRight = detailsCard
     ? detailsCard.left - DETAILS_CARD_CLEARANCE
     : container.width - padding;
+  // A preferred width above the base gives way before chat would lose its
+  // margins, so wider settings grow into free space instead of hugging edges.
+  const marginRight = detailsCard ? laneRight : container.width - CHAT_MARGIN;
+  const fluidWidth = Math.min(
+    maxChatWidth,
+    Math.max(BASE_CHAT_WIDTH, marginRight - CHAT_MARGIN),
+  );
+  const centeredWidth = Math.max(0, Math.min(fluidWidth, container.width - padding * 2));
+  // A workspace card that does not fit beside the centered chat first moves
+  // chat left, only as far as it needs. Chat narrows only after it reaches the
+  // left padding.
   const normalWidth = Math.max(0, Math.min(centeredWidth, laneRight - padding));
   const normalLeft = Math.max(
     padding,
@@ -110,7 +121,7 @@ export function resolveChatCanvasLayout({
     const chatBeside = (player: PreviewMiniPlayerFrame) => {
       const normalRight = normalLeft + normalWidth;
       if (player.x >= normalRight + GAP) return chat;
-      const width = Math.min(maxChatWidth, player.x - GAP - padding);
+      const width = Math.min(fluidWidth, player.x - GAP - padding);
       if (width < minChatWidth) return null;
       const left = Math.min(normalLeft, player.x - GAP - width);
       return {

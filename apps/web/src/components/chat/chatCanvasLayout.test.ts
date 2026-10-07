@@ -53,6 +53,14 @@ describe("chat canvas layout", () => {
     expect(resolve(1344, null).chat).toEqual({ left: 288, width: 768, insetStart: 0, insetEnd: 0 });
     expect(resolve(390, null).chat).toEqual({ left: 20, width: 350, insetStart: 0, insetEnd: 0 });
   });
+  it("keeps margins around a full-width chat without a card", () => {
+    const chat = resolveChatCanvasLayout({
+      container: { width: 1344, height: 900 },
+      preview: null,
+      maxChatWidth: 10_000,
+    }).chat;
+    expect(chat).toEqual({ left: 64, width: 1216, insetStart: 0, insetEnd: 0 });
+  });
   it("does not move chat when a bottom-right preview fits in its margin", () => {
     const result = resolve(1600);
     expect(result.chat.insetEnd).toBe(0);
@@ -278,13 +286,18 @@ describe("workspace card beside chat", () => {
     expect(withCard(1000).chat).toEqual({ left: 20, width: 656, insetStart: 0, insetEnd: 304 });
     expect(withCard(984).chat).toMatchObject({ left: 20, width: 640 });
   });
-  it("keeps a full-width chat clear of the card", () => {
+  it("keeps a full-width chat clear of the card and the left edge", () => {
     expect(withCard(1147, null, 10_000).chat).toEqual({
-      left: 20,
-      width: 803,
+      left: 64,
+      width: 759,
       insetStart: 0,
-      insetEnd: 304,
+      insetEnd: 260,
     });
+  });
+  it("narrows a wide preference before it gives up its margins", () => {
+    expect(withCard(1450, null, 896).chat).toMatchObject({ left: 230, width: 896 });
+    expect(withCard(1150, null, 896).chat).toMatchObject({ left: 64, width: 762 });
+    expect(withCard(1080, null, 896).chat).toMatchObject({ left: 20, width: 736 });
   });
   it("keeps centered chat in place when a new preview opens below the card", () => {
     expect(withCard(1440, preview)).toEqual({

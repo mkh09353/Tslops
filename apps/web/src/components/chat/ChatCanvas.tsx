@@ -122,13 +122,16 @@ export function ChatCanvas({
             "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
             "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
             "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+            ...(measurements.width > 0 && {
+              "--chat-content-max-width": `${layout.chat.width}px`,
+            }),
           } as CSSProperties
         }
       >
         <div
           ref={widthProbeRef}
           aria-hidden
-          className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-5"
+          className="pointer-events-none invisible absolute h-0 w-(--chat-content-preferred-width) min-w-[40rem] box-content ps-3 sm:ps-5"
         />
         {children}
       </div>
