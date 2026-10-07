@@ -7,31 +7,26 @@ import type { FilesystemSearchDirectoriesEntry } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import * as Schedule from "effect/Schedule";
 
 // Loaded through `require` for the same single-executable reason as
 // WorkspaceSearchIndex.
 const requireForFff = NodeModule.createRequire(import.meta.url);
 const { FileFinder } = requireForFff("@ff-labs/fff-node") as typeof import("@ff-labs/fff-node");
 
-/** A shard still scanning after this long is split into its child folders. */
-const SHARD_SCAN_BUDGET_MS = 5_000;
 /** How long a query waits for shards it just created, so the first keystroke has results. */
 const FRESH_SHARD_WAIT_MS = 1_000;
-/** Indexes do not watch the filesystem; they are rebuilt after this long instead. */
-const SHARD_MAX_AGE_MS = 10 * 60_000;
-/** A split folder is retried as one shard after this long, since its files may be local by then. */
-const SPLIT_RETRY_MS = 60 * 60_000;
-/** Deepest relative depth of a folder that may be split; deeper slow shards are dropped. */
-const MAX_SPLIT_DEPTH = 4;
-const MAX_SHARDS_PER_SEARCH = 200;
+/** Shards do not watch the filesystem; a search rescans one in place once it is this old. */
+const SHARD_RESCAN_AFTER_MS = 5 * 60_000;
+/** Deepest relative depth matched from directory listings while a shard's first scan runs. */
+const NAME_WALK_MAX_DEPTH = 3;
+const NAME_WALK_MAX_LISTINGS = 200;
 /** Folders that hold installed software rather than projects; never indexed. */
 const SKIPPED_FOLDER_NAMES = new Set(["Applications", "Library", "node_modules"]);
 const DIRNAME_MATCH_TYPES = new Set(["exact_dirname", "fuzzy_dirname"]);
 
 interface Shard {
   readonly finder: FileFinderType;
-  readonly createdAt: number;
+  scannedAt: number;
 }
 
 interface Candidate extends FilesystemSearchDirectoriesEntry {
@@ -68,61 +63,48 @@ const listChildFolders = (directory: string) =>
 /**
  * Fuzzy folder search for the add-project picker, backed by fff.
  *
- * A search root such as `~` is too large to index as one fff index, and
- * iCloud-synced folders can take minutes to scan while evicted files download.
- * Each child folder of the root is indexed as its own shard instead. A shard
- * still scanning after its budget is split into one shard per child folder, so
- * `~/Documents` becomes `~/Documents/Code`, then each repo inside it. Folder
- * names along the split path are matched from directory listings, so a repo is
- * found by name even while its own index is slow. Shards are shared across
- * roots by path and rebuilt after `SHARD_MAX_AGE_MS`. fff only knows folders
- * that directly hold files, which every project root does.
+ * Each child folder of the search root is indexed as its own shard, so a slow
+ * folder such as an iCloud-synced `~/Documents` does not hold back the rest.
+ * Shards are created on the first search, kept for the life of the server, and
+ * rescanned in place when stale: fff's `destroy` neither stops a running scan
+ * nor returns the index's memory, so rebuilding shards would cost more than
+ * keeping them. A first scan can take minutes while iCloud fetches metadata;
+ * until it finishes, folder names inside that shard are matched from directory
+ * listings. fff only knows folders that directly hold files, which every
+ * project root does.
  */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const scope = yield* Effect.scope;
   const shards = new Map<string, Shard>();
-  const splitUntil = new Map<string, number>();
-
-  const destroyShard = (shardPath: string) => {
-    const shard = shards.get(shardPath);
-    if (!shard) return;
-    shards.delete(shardPath);
-    try {
-      shard.finder.destroy();
-    } catch {
-      // Destroying an already-torn-down native index is harmless.
-    }
-  };
-
-  const splitShard = (shardPath: string, now: number) => {
-    destroyShard(shardPath);
-    splitUntil.set(shardPath, now + SPLIT_RETRY_MS);
-  };
-
-  const sweep = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-    for (const [shardPath, shard] of shards) {
-      if (now - shard.createdAt > SHARD_MAX_AGE_MS) destroyShard(shardPath);
-    }
-    for (const [shardPath, until] of splitUntil) {
-      if (until <= now) splitUntil.delete(shardPath);
-    }
-  });
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
-      for (const shardPath of shards.keys()) destroyShard(shardPath);
+      for (const shard of shards.values()) {
+        try {
+          shard.finder.destroy();
+        } catch {
+          // Destroying an already-torn-down native index is harmless.
+        }
+      }
+      shards.clear();
     }),
   );
-  yield* sweep.pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.forkScoped);
 
   /** Returns the shard and whether this call created it. */
-  const acquireShard = Effect.fn("DirectorySearch.acquireShard")(function* (shardPath: string) {
+  const acquireShard = Effect.fn("DirectorySearch.acquireShard")(function* (
+    shardPath: string,
+    now: number,
+  ) {
     const existing = shards.get(shardPath);
-    if (existing) return { shard: existing, fresh: false };
+    if (existing) {
+      if (now - existing.scannedAt > SHARD_RESCAN_AFTER_MS && !existing.finder.isScanning()) {
+        // Rescans run in the background and keep serving the previous results.
+        existing.scannedAt = now;
+        yield* Effect.try(() => existing.finder.scanFiles()).pipe(Effect.ignore);
+      }
+      return { shard: existing, fresh: false };
+    }
 
-    const now = yield* Clock.currentTimeMillis;
     const created = yield* Effect.try(() =>
       FileFinder.create({
         basePath: shardPath,
@@ -133,21 +115,9 @@ export const make = Effect.gen(function* () {
         enableHomeDirScanning: true,
       }),
     ).pipe(Effect.orElseSucceed(() => null));
-    if (!created?.ok) {
-      splitShard(shardPath, now);
-      return null;
-    }
-    const shard: Shard = { finder: created.value, createdAt: now };
+    if (!created?.ok) return null;
+    const shard: Shard = { finder: created.value, scannedAt: now };
     shards.set(shardPath, shard);
-    yield* Effect.promise(() => shard.finder.waitForScan(SHARD_SCAN_BUDGET_MS)).pipe(
-      Effect.andThen(() => Clock.currentTimeMillis),
-      Effect.map((finishedAt) => {
-        if (shards.get(shardPath) === shard && shard.finder.isScanning()) {
-          splitShard(shardPath, finishedAt);
-        }
-      }),
-      Effect.forkIn(scope),
-    );
     return { shard, fresh: true };
   });
 
@@ -160,41 +130,28 @@ export const make = Effect.gen(function* () {
     const normalizedQuery = normalizeName(input.query);
     const now = yield* Clock.currentTimeMillis;
     const candidates: Candidate[] = [];
-    const active: Array<{
-      readonly relativePath: string;
-      readonly path: string;
-      readonly shard: Shard;
-    }> = [];
-    const freshShards: Shard[] = [];
-    const pending = input.childNames.map((name) => ({ relativePath: name, depth: 1 }));
-
-    for (
-      let next = pending.shift();
-      next !== undefined && active.length < MAX_SHARDS_PER_SEARCH;
-      next = pending.shift()
-    ) {
-      const { relativePath, depth } = next;
+    const matchName = (relativePath: string, depth: number) => {
       const segments = relativePath.split("/");
-      const name = segments.at(-1) ?? relativePath;
-      const fullPath = path.join(input.root, ...segments);
-      const tier = nameTier(name, normalizedQuery);
+      const tier = nameTier(segments.at(-1) ?? relativePath, normalizedQuery);
       if (tier < 3) {
-        candidates.push({ relativePath, fullPath, tier, depth, score: 0 });
+        candidates.push({
+          relativePath,
+          fullPath: path.join(input.root, ...segments),
+          tier,
+          depth,
+          score: 0,
+        });
       }
+    };
+
+    const active: Array<{ readonly relativePath: string; readonly shard: Shard }> = [];
+    const freshShards: Shard[] = [];
+    for (const name of input.childNames) {
+      matchName(name, 1);
       if (SKIPPED_FOLDER_NAMES.has(name)) continue;
-
-      if ((splitUntil.get(fullPath) ?? 0) > now) {
-        if (depth < MAX_SPLIT_DEPTH) {
-          for (const child of yield* listChildFolders(fullPath)) {
-            pending.push({ relativePath: `${relativePath}/${child}`, depth: depth + 1 });
-          }
-        }
-        continue;
-      }
-
-      const acquired = yield* acquireShard(fullPath);
+      const acquired = yield* acquireShard(path.join(input.root, name), now);
       if (!acquired) continue;
-      active.push({ relativePath, path: fullPath, shard: acquired.shard });
+      active.push({ relativePath: name, shard: acquired.shard });
       if (acquired.fresh) freshShards.push(acquired.shard);
     }
 
@@ -204,8 +161,12 @@ export const make = Effect.gen(function* () {
       );
     }
 
-    for (const { relativePath, path: shardPath, shard } of active) {
-      if (shards.get(shardPath) !== shard || shard.finder.isScanning()) continue;
+    let walk: Array<string> = [];
+    for (const { relativePath, shard } of active) {
+      if (shard.finder.isScanning()) {
+        walk.push(relativePath);
+        continue;
+      }
       const result = yield* Effect.try(() =>
         shard.finder.directorySearch(input.query, { pageSize: input.limit }),
       ).pipe(Effect.orElseSucceed(() => null));
@@ -217,12 +178,32 @@ export const make = Effect.gen(function* () {
         const segments = relativeToShard.split("/");
         candidates.push({
           relativePath: `${relativePath}/${relativeToShard}`,
-          fullPath: path.join(shardPath, ...segments),
+          fullPath: path.join(input.root, relativePath, ...segments),
           tier: nameTier(segments.at(-1) ?? relativeToShard, normalizedQuery),
-          depth: relativePath.split("/").length + segments.length,
+          depth: 1 + segments.length,
           score: score.total,
         });
       });
+    }
+
+    // Shards still on their first scan return nothing, so match names inside them from listings.
+    let listings = 0;
+    for (let depth = 2; depth <= NAME_WALK_MAX_DEPTH && walk.length > 0; depth++) {
+      const parents = walk.slice(0, NAME_WALK_MAX_LISTINGS - listings);
+      listings += parents.length;
+      const children = yield* Effect.forEach(
+        parents,
+        (parent) =>
+          listChildFolders(path.join(input.root, ...parent.split("/"))).pipe(
+            Effect.map((names) => names.map((name) => `${parent}/${name}`)),
+          ),
+        { concurrency: 16 },
+      );
+      walk = [];
+      for (const child of children.flat()) {
+        matchName(child, depth);
+        if (!SKIPPED_FOLDER_NAMES.has(child.split("/").at(-1) ?? child)) walk.push(child);
+      }
     }
 
     // Name matches rank shallow-first; typo-tolerant fff matches rank by score.
