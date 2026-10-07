@@ -119,5 +119,9 @@ export function createFilesystemEnvironmentAtoms<R, E>(
       label: "environment-data:filesystem:browse",
       tag: WS_METHODS.filesystemBrowse,
     }),
+    searchDirectories: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:filesystem:search-directories",
+      tag: WS_METHODS.filesystemSearchDirectories,
+    }),
   };
 }

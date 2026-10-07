@@ -21,6 +21,27 @@ export const FilesystemBrowseResult = Schema.Struct({
 });
 export type FilesystemBrowseResult = typeof FilesystemBrowseResult.Type;
 
+export const FilesystemSearchDirectoriesInput = Schema.Struct({
+  /** Directory to search under, resolved like `FilesystemBrowseInput.partialPath`. */
+  directoryPath: TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH)),
+  cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(FILESYSTEM_PATH_MAX_LENGTH))),
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+});
+export type FilesystemSearchDirectoriesInput = typeof FilesystemSearchDirectoriesInput.Type;
+
+export const FilesystemSearchDirectoriesEntry = Schema.Struct({
+  /** Path relative to the searched directory, using "/" separators. */
+  relativePath: TrimmedNonEmptyString,
+  fullPath: TrimmedNonEmptyString,
+});
+export type FilesystemSearchDirectoriesEntry = typeof FilesystemSearchDirectoriesEntry.Type;
+
+export const FilesystemSearchDirectoriesResult = Schema.Struct({
+  entries: Schema.Array(FilesystemSearchDirectoriesEntry),
+});
+export type FilesystemSearchDirectoriesResult = typeof FilesystemSearchDirectoriesResult.Type;
+
 export const FilesystemBrowseFailure = Schema.Literals([
   "windows_path_unsupported",
   "current_project_required",
