@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -127,6 +128,40 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const uuids = batches.map((batch) => batch.map((event) => event.uuid).join(","));
       assert.equal(new Set(uuids).size, 1, "every retry carries the same uuids");
       assert.equal(new Set(batches[0]?.map((event) => event.uuid)).size, 20);
+    }),
+  );
+
+  it.effect("sends nothing unless telemetry is explicitly enabled", () =>
+    Effect.gen(function* () {
+      const requests: Array<string> = [];
+      const layerRuntime = AnalyticsService.layer.pipe(
+        Layer.provideMerge(
+          ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-default-" }),
+        ),
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HostProcess.Platform, "darwin"),
+            Layer.succeed(HostProcess.Architecture, "arm64"),
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) => {
+                requests.push(request.url);
+                return Effect.succeed(HttpClientResponse.fromWeb(request, new Response("{}")));
+              }),
+            ),
+          ),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("test.default-off");
+        yield* analytics.flush;
+        yield* TestClock.adjust("10 seconds");
+      }).pipe(Effect.provide(layerRuntime));
+
+      assert.deepEqual(requests, []);
     }),
   );
 
