@@ -128,16 +128,41 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   return (
     // Center the visible capitals, without the font's ascender/descender space.
-    // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
-    <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
-      <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
-      <span
-        className={cn(
-          "truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
-          onBackdrop ? "text-white/70" : "text-muted-foreground",
-        )}
-      >
-        Code
+    // Padding keeps ascenders and round-letter overshoot inside the brand link's clip.
+    <span className="inline-flex min-w-0 items-baseline gap-1.5 text-sm font-medium tracking-tight">
+      {/* The old name, crossed out by hand. */}
+      <span aria-hidden="true" className="relative inline-flex shrink-0 items-baseline gap-1">
+        <T3Wordmark className="h-[1cap] w-auto shrink-0" />
+        <span
+          className={cn(
+            "[text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
+            onBackdrop ? "text-white/70" : "text-muted-foreground",
+          )}
+        >
+          Code
+        </span>
+        <svg
+          className="pointer-events-none absolute -left-0.5 top-1/2 h-[1.1cap] w-[calc(100%+0.25rem)] -translate-y-1/2 overflow-visible text-destructive"
+          fill="none"
+          preserveAspectRatio="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          viewBox="0 0 100 10"
+        >
+          <path
+            d="M1 6 C 20 2, 38 8, 56 4 S 86 7, 99 3"
+            strokeWidth="1.6"
+            vectorEffect="non-scaling-stroke"
+          />
+          <path
+            d="M3 4 C 24 8, 48 2, 68 6 S 90 3, 98 7"
+            strokeWidth="1.3"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+      </span>
+      <span className="inline-block -rotate-6 truncate font-hand text-base leading-none font-bold tracking-normal text-destructive">
+        tSlops
       </span>
     </span>
   );
