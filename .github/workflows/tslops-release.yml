@@ -1,0 +1,142 @@
+name: Release tSlops
+
+# Builds a signed, notarized Apple Silicon tSlops app and publishes it as the
+# latest GitHub release of this repository. The app's updater reads
+# latest-mac.yml from that release, so every published version reaches
+# installed apps on their next update check.
+#
+# Run it from the Actions tab or with `gh workflow run tslops-release.yml`.
+#
+# Required repository secrets:
+#   CSC_LINK          base64 of a .p12 holding the Developer ID Application certificate and key
+#   CSC_KEY_PASSWORD  password of that .p12
+#   APPLE_API_KEY     contents of an App Store Connect API key (.p8), used for notarization
+#   APPLE_API_KEY_ID  that key's ID
+#   APPLE_API_ISSUER  that key's issuer ID
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tslops-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      # .repos holds orphaned gitlinks that break checkout's submodule cleanup.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      # Versions keep the desktop package's major.minor and count releases in
+      # the patch, so each run is newer than the last and stays on the stable
+      # update channel.
+      - name: Resolve version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          version="${base%.*}.${GITHUB_RUN_NUMBER}"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "Release v$version already exists." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing tSlops v$version"
+
+      - name: Check signing secrets
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            # macOS only installs updates signed by the same developer, so an
+            # unsigned release would strand every installed copy.
+            echo "Missing signing secrets: ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      # GITHUB_REPOSITORY points the bundled update feed at this repository.
+      - name: Build, sign, and notarize
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$key_path"
+          export APPLE_API_KEY="$key_path"
+          vp run dist:desktop:artifact \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ steps.version.outputs.version }}" \
+            --signed \
+            --verbose
+
+      # Check the app users actually download, inside the DMG.
+      - name: Verify signature and notarization
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mount="$(hdiutil attach -nobrowse -readonly "release/tSlops-$VERSION-arm64.dmg" | awk -F'\t' '/\/Volumes\// {print $NF}')"
+          codesign --verify --deep --strict --verbose=2 "$mount/tSlops.app"
+          spctl --assess --type execute --verbose=2 "$mount/tSlops.app"
+          hdiutil detach "$mount"
+          cat release/latest-mac.yml
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "tSlops v$VERSION" \
+            --generate-notes \
+            --latest \
+            release/tSlops-"$VERSION"-arm64.dmg \
+            release/tSlops-"$VERSION"-arm64.dmg.blockmap \
+            release/tSlops-"$VERSION"-arm64.zip \
+            release/tSlops-"$VERSION"-arm64.zip.blockmap \
+            release/latest-mac.yml
