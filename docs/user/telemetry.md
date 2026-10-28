@@ -16,10 +16,9 @@ raw provider events, or child-agent output. Child-agent token use is excluded fr
 
 To turn it on, set `T3CODE_TELEMETRY_ENABLED=true` in the server's environment before starting it.
 
-T3 Code also sends relay connection traces to Axiom to diagnose T3 Connect connectivity. Leaving
-`T3CODE_TELEMETRY_ENABLED` unset does not stop them; set it to `false` to turn relay tracing off
-along with product events. Relay tracing also stops when `T3CODE_OTEL_SDK_DISABLED` or
-`OTEL_SDK_DISABLED` turns OpenTelemetry export off. The web app in a browser, including one the
+Turning it on also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.
+Relay tracing still stays off when `T3CODE_OTEL_SDK_DISABLED` or `OTEL_SDK_DISABLED` turns
+OpenTelemetry export off. The web app in a browser, including one the
 `t3` CLI opens, does not read these variables.
 
 The desktop app reads `T3CODE_TELEMETRY_ENABLED` from your shell profile (for example `~/.zshrc`) on macOS and
