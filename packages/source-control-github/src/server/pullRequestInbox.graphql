@@ -1,0 +1,75 @@
+# The viewer's own open pull requests across every repository, with their review conversations
+# inline, in one read. It backs the My pull requests page: one search rather than a listing per
+# workspace repository, so it does not depend on which projects are open.
+query PullRequestInbox($q: String!, $first: Int!) {
+  viewer {
+    login
+  }
+  search(query: $q, type: ISSUE, first: $first) {
+    pageInfo {
+      hasNextPage
+    }
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        url
+        headRefName
+        baseRefName
+        isDraft
+        mergeable
+        reviewDecision
+        updatedAt
+        repository {
+          nameWithOwner
+        }
+        latestReviews(first: 20) {
+          nodes {
+            state
+          }
+        }
+        labels(first: 20) {
+          nodes {
+            name
+            color
+          }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+              }
+            }
+          }
+        }
+        reviewThreads(first: 50) {
+          totalCount
+          nodes {
+            id
+            isResolved
+            isOutdated
+            path
+            line
+            diffSide
+            comments(first: 10) {
+              totalCount
+              nodes {
+                id
+                author {
+                  __typename
+                  login
+                  avatarUrl
+                }
+                body
+                createdAt
+                lastEditedAt
+                url
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

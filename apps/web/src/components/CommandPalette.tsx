@@ -1529,6 +1529,16 @@ function OpenCommandPaletteDialog(props: {
         await navigate({ to: "/pull-requests", search: readPullRequestListPreferences() });
       },
     });
+    actionItems.push({
+      kind: "action",
+      value: "action:my-pull-requests",
+      searchTerms: ["my pull requests", "my prs", "inbox", "review comments", "feedback"],
+      title: "Open my pull requests",
+      icon: <PullRequestGlyph.pullRequest className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/my-pull-requests" });
+      },
+    });
   }
 
   actionItems.push({

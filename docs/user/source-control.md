@@ -176,6 +176,13 @@ co-authors stay credited. The setting is off by default and projects can overrid
 applies to auto-merge, but not merge queues or native stack merges. Original commits keep their
 messages, so merge and rebase can still retain agent credits in those commits.
 
+The sidebar's **Pull Requests** item opens **My pull requests**: every open GitHub pull request
+you wrote, grouped by repository, with conflicts, checks, review state, ready labels, and
+unresolved review comments. Expand a row to read the comments and mark each one **Fix it** or
+**Push back**. **Address** queues a message in the thread linked to the pull request asking its
+agent to fix or answer the feedback, resolve conflicts and failing checks, and push. **Browse all**
+opens the full pull request list.
+
 On web and desktop, hold **Shift** in the GitHub pull request list for quick actions.
 To close several, press **Close**, drag across the rows in the same group, and release.
 Press **Escape** before releasing to cancel. Failed closes stay in the list so you can retry them.

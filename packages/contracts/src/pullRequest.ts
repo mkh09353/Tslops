@@ -438,6 +438,39 @@ export const PullRequestLinkedThreadsResult = Schema.Struct({
 });
 export type PullRequestLinkedThreadsResult = typeof PullRequestLinkedThreadsResult.Type;
 
+/**
+ * One open pull request the viewer wrote, with its review conversations inline so the inbox can
+ * show what is unresolved without a detail read per row.
+ */
+export const PullRequestInboxEntry = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  headBranch: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  isDraft: Schema.Boolean,
+  mergeability: PullRequestMergeability,
+  reviewDecision: Schema.NullOr(PullRequestReviewDecision),
+  checksState: Schema.NullOr(PullRequestChecksState),
+  labels: Schema.Array(PullRequestLabel),
+  updatedAt: IsoDateTime,
+  reviewThreads: Schema.Array(PullRequestReviewThread),
+  /** More review threads exist than were read; counts drawn from `reviewThreads` are a floor. */
+  reviewThreadsTruncated: Schema.Boolean,
+});
+export type PullRequestInboxEntry = typeof PullRequestInboxEntry.Type;
+
+export const PullRequestInboxResult = Schema.Struct({
+  /** The signed-in login, which tells a reply from the author apart from a reviewer's remark. */
+  viewer: TrimmedNonEmptyString,
+  entries: Schema.Array(PullRequestInboxEntry),
+  /** The viewer has more open pull requests than one read returns. */
+  truncated: Schema.Boolean,
+});
+export type PullRequestInboxResult = typeof PullRequestInboxResult.Type;
+
 export const PullRequestPreview = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,

@@ -2577,6 +2577,7 @@ export const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.summary(input)),
         [WS_METHODS.pullRequestsStack]: (input) =>
           withPullRequestViewer(input, pullRequests.stack(input)),
+        [WS_METHODS.pullRequestsInbox]: () => pullRequests.inbox(),
         [WS_METHODS.pullRequestsLinkedThreads]: (input) =>
           resolvePullRequestSyncKey(input).pipe(
             Effect.flatMap((key) =>

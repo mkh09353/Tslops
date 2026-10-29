@@ -4,6 +4,7 @@ import {
   PullRequestDetail as PullRequestDetailSchema,
   PullRequestPreview,
   PullRequestReviewGuideResult,
+  PullRequestInboxResult,
   PullRequestListResult,
   PullRequestChecks,
   PullRequestDiffResult,
@@ -339,6 +340,15 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsLinkedThreads,
       staleTimeMs: 0,
       idleTtlMs: 0,
+    }),
+    /** The viewer's own open pull requests with their review conversations, in one read. */
+    inbox: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:inbox",
+      persistence: persistQuery(PullRequestInboxResult),
+      tag: WS_METHODS.pullRequestsInbox,
+      staleTimeMs: 30_000,
+      refreshIntervalMs: 120_000,
+      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
     }),
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:list",

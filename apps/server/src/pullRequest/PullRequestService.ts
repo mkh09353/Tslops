@@ -49,6 +49,7 @@ import {
   type PullRequestActor,
   type PullRequestLabel,
   type PullRequestListStatsResult,
+  type PullRequestInboxResult,
   type PullRequestProviderSummary,
   type PullRequestReactionInput,
   type PullRequestRef,
@@ -179,6 +180,8 @@ export class PullRequestService extends Context.Service<
     readonly listStats: (
       input: PullRequestListStatsInput,
     ) => Effect.Effect<PullRequestListStatsResult, PullRequestError>;
+    /** The viewer's own open pull requests on github.com, with their review conversations. */
+    readonly inbox: () => Effect.Effect<PullRequestInboxResult, PullRequestError>;
     readonly filterOptions: (
       input: PullRequestFilterOptionsInput,
     ) => Effect.Effect<PullRequestFilterOptions, PullRequestError>;
@@ -539,6 +542,9 @@ function withRateLimitBackoff(
       : {
           getChangeRequestSummary: wrap("getChangeRequestSummary", api.getChangeRequestSummary),
         }),
+    ...(api.listViewerInbox === undefined
+      ? {}
+      : { listViewerInbox: wrap("listViewerInbox", api.listViewerInbox) }),
     ...(api.getChangeRequestStack === undefined
       ? {}
       : { getChangeRequestStack: wrap("getChangeRequestStack", api.getChangeRequestStack) }),
@@ -2565,6 +2571,31 @@ export const make = Effect.gen(function* () {
    * The line counts for rows already on the page, which the listing left out because on GitHub
    * they cost more than everything else on the row put together.
    */
+  /**
+   * One search for every open pull request the viewer wrote on github.com, across repositories.
+   * Read through any github.com project, since the credential is the host's rather than the repo's.
+   */
+  const inbox: PullRequestService["Service"]["inbox"] = Effect.fn("PullRequestService.inbox")(
+    function* () {
+      const { supported } = yield* listWorkspaceProjects({});
+      const project = supported.find(
+        (candidate) =>
+          candidate.host.toLowerCase() === "github.com" &&
+          candidate.api.listViewerInbox !== undefined,
+      );
+      const read = project?.api.listViewerInbox;
+      if (project === undefined || read === undefined) {
+        return yield* new PullRequestUnavailableError({
+          reason: "provider-unsupported",
+          provider: SourceControlProviderKind.make("github"),
+        });
+      }
+      return yield* read({ cwd: project.project.workspaceRoot, host: project.host }).pipe(
+        Effect.mapError(toPullRequestError("inbox")),
+      );
+    },
+  );
+
   const listStatsUncached: PullRequestService["Service"]["listStats"] = Effect.fn(
     "PullRequestService.listStatsUncached",
   )(function* (input) {
@@ -3642,6 +3673,7 @@ export const make = Effect.gen(function* () {
     routingIdentity,
     withRoutingCredential,
     list,
+    inbox,
     filterOptions,
     // The local operation owns the span; this wrapper only canonicalizes refs.
     listStats: Effect.fnUntraced(function* (input) {

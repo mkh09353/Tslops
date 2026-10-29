@@ -199,6 +199,7 @@ import {
   PullRequestRoutingIdentityResult,
   PullRequestStack,
   PullRequestLinkedThreadsResult,
+  PullRequestInboxResult,
   PullRequestSummary,
   PullRequestReviewerCandidateList,
   PullRequestReviewerRequestInput,
@@ -550,6 +551,7 @@ export const WS_METHODS = {
   pullRequestsRoutingIdentity: "pullRequests.routingIdentity",
   pullRequestsStack: "pullRequests.stack",
   pullRequestsLinkedThreads: "pullRequests.linkedThreads",
+  pullRequestsInbox: "pullRequests.inbox",
   pullRequestsDetail: "pullRequests.detail",
   pullRequestsPreview: "pullRequests.preview",
   pullRequestsChecks: "pullRequests.checks",
@@ -1026,6 +1028,13 @@ const WsPullRequestsStackRpc = Rpc.make(WS_METHODS.pullRequestsStack, {
 const WsPullRequestsLinkedThreadsRpc = Rpc.make(WS_METHODS.pullRequestsLinkedThreads, {
   payload: PullRequestRef,
   success: PullRequestLinkedThreadsResult,
+  error: PullRequestRpcError,
+});
+
+/** The viewer's own open pull requests on github.com, with their review conversations. */
+const WsPullRequestsInboxRpc = Rpc.make(WS_METHODS.pullRequestsInbox, {
+  payload: Schema.Struct({}),
+  success: PullRequestInboxResult,
   error: PullRequestRpcError,
 });
 
@@ -2008,6 +2017,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsRoutingIdentityRpc,
   WsPullRequestsStackRpc,
   WsPullRequestsLinkedThreadsRpc,
+  WsPullRequestsInboxRpc,
   WsPullRequestsDetailRpc,
   WsPullRequestsPreviewRpc,
   WsPullRequestsChecksRpc,

@@ -402,6 +402,9 @@ export const make = Effect.gen(function* () {
           ),
         ),
 
+    listViewerInbox: (input) =>
+      cli.listViewerInbox(input).pipe(Effect.mapError(fail("listViewerInbox"))),
+
     listChangeRequestStats: (input) =>
       cli
         .listPullRequestStats({

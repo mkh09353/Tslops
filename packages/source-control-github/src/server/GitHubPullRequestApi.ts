@@ -27,6 +27,7 @@ import {
   type PullRequestComment,
   type PullRequestCommit,
   type PullRequestFileViewed,
+  type PullRequestInboxResult,
   type PullRequestInvolvement,
   type PullRequestListFilters,
   type PullRequestListState,
@@ -66,7 +67,11 @@ import {
   type GitHubPullRequestWatchFingerprint,
   isSubjectOfPullRequest,
   LenientPullRequestList,
+  LenientPullRequestInbox,
   LenientPullRequestSearch,
+  PULL_REQUEST_INBOX_MAX_ROWS,
+  PULL_REQUEST_INBOX_QUERY,
+  toPullRequestInbox,
   pageRows,
   pullRequestLookup,
   toLabelCandidates,
@@ -450,6 +455,12 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly cursor?: ProviderListCursor | undefined;
       readonly filters?: PullRequestListFilters | undefined;
     }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestApiError>;
+
+    /** The viewer's own open pull requests on `host`, across repositories, with review threads. */
+    readonly listViewerInbox: (input: {
+      readonly cwd: string;
+      readonly host: string;
+    }) => Effect.Effect<PullRequestInboxResult, GitHubPullRequestApiError>;
 
     readonly listPullRequestStats: (input: {
       readonly cwd: string;
@@ -871,7 +882,7 @@ const GRAPHQL_MERGE_METHODS = {
 
 const PullRequestGraphQLGroup = GraphQLGroup.merge(
   PullRequestBatchesGraphQLGroup,
-  GraphQLGroup.make(LenientPullRequestSearch, LenientPullRequestList),
+  GraphQLGroup.make(LenientPullRequestSearch, LenientPullRequestList, LenientPullRequestInbox),
   PullRequestReadsGraphQLGroup,
   PullRequestReviewsGraphQLGroup,
   PullRequestMutationsGraphQLGroup,
@@ -1888,6 +1899,21 @@ export const make = Effect.gen(function* () {
             };
           }),
         );
+    }),
+
+    listViewerInbox: Effect.fn("GitHubPullRequestApi.listViewerInbox")(function* (input) {
+      const result = yield* client
+        .PullRequestInbox({ q: PULL_REQUEST_INBOX_QUERY, first: PULL_REQUEST_INBOX_MAX_ROWS })
+        .pipe(graphql({ ...input, operation: "listViewerInbox" }));
+      const inbox = toPullRequestInbox(result, input.host);
+      if (inbox === null) {
+        return yield* new GitHubPullRequestReadError({
+          cwd: input.cwd,
+          operation: "listViewerInbox",
+          cause: "GitHub answered without a viewer login.",
+        });
+      }
+      return inbox;
     }),
 
     listPullRequestStats: Effect.fn("GitHubPullRequestApi.listPullRequestStats")(

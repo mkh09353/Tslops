@@ -24,6 +24,8 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewPosition,
+  PullRequestInboxEntry,
+  PullRequestInboxResult,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidate,
@@ -49,6 +51,7 @@ import {
   PullRequestRow,
   PullRequestSearch,
 } from "./pullRequestListings.graphql.ts";
+import { PullRequest as InboxPullRequest, PullRequestInbox } from "./pullRequestInbox.graphql.ts";
 import type {
   CheckContext,
   LabelCandidates,
@@ -782,6 +785,103 @@ export const LenientPullRequestList = GraphQL.query(PullRequestList.name, {
 });
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
+
+/** How many of the viewer's open pull requests one inbox read covers. */
+export const PULL_REQUEST_INBOX_MAX_ROWS = 50;
+export const PULL_REQUEST_INBOX_QUERY = "is:pr is:open author:@me archived:false sort:updated-desc";
+/**
+ * Review bots write essays. The inbox shows a remark to judge it, not to read every word, so a
+ * body is cut here rather than shipping megabytes to every client on each refresh.
+ */
+const PULL_REQUEST_INBOX_MAX_BODY_CHARS = 4_000;
+
+const LenientInboxResult = Schema.Struct({
+  viewer: Schema.Struct({ login: Schema.String }),
+  search: Schema.Struct({
+    pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+    nodes: Schema.NullOr(Schema.Array(Schema.Unknown)),
+  }),
+});
+
+/** Decode pull requests individually so one invalid node cannot blank the inbox. */
+export const LenientPullRequestInbox = GraphQL.query(PullRequestInbox.name, {
+  document: PullRequestInbox.document,
+  variables: PullRequestInbox.variables,
+  result: LenientInboxResult,
+});
+
+const decodeInboxNode = Schema.decodeUnknownExit(InboxPullRequest);
+
+function clipInboxBody(body: string): string {
+  return body.length > PULL_REQUEST_INBOX_MAX_BODY_CHARS
+    ? `${body.slice(0, PULL_REQUEST_INBOX_MAX_BODY_CHARS)}…`
+    : body;
+}
+
+function toInboxEntry(node: InboxPullRequest, host: string): PullRequestInboxEntry | null {
+  const repository = trimmed(node.repository.nameWithOwner);
+  if (repository === null) return null;
+  const threads = node.reviewThreads;
+  const threadNodes = nodesOf(threads);
+  const reviewThreads = threadNodes.flatMap((thread): ReadonlyArray<PullRequestReviewThread> => {
+    const id = trimmed(thread.id);
+    const path = trimmed(thread.path);
+    const comments = nodesOf(thread.comments);
+    if (id === null || path === null || comments.length === 0) return [];
+    return [
+      {
+        id,
+        path,
+        line: thread.line !== null && thread.line > 0 ? thread.line : null,
+        side: thread.diffSide.toUpperCase() === "LEFT" ? "left" : "right",
+        isResolved: thread.isResolved,
+        isOutdated: thread.isOutdated,
+        comments: comments.map((comment) => ({
+          id: comment.id,
+          author: toActor(comment.author),
+          body: clipInboxBody(comment.body),
+          createdAt: comment.createdAt,
+          editedAt: comment.lastEditedAt,
+          url: trimmed(comment.url),
+        })),
+        commentCount: thread.comments.totalCount,
+      },
+    ];
+  });
+  return {
+    host,
+    repository,
+    number: node.number,
+    title: node.title,
+    url: node.url,
+    headBranch: node.headRefName,
+    baseBranch: node.baseRefName,
+    isDraft: node.isDraft,
+    mergeability: toMergeability(node.mergeable),
+    reviewDecision: toReviewDecisionWithReviews(node.reviewDecision, nodesOf(node.latestReviews)),
+    checksState: rollupChecksState(rollupStates(node.commits)),
+    labels: toLabels(nodesOf(node.labels)),
+    updatedAt: node.updatedAt,
+    reviewThreads,
+    reviewThreadsTruncated: threads.totalCount > threadNodes.length,
+  };
+}
+
+/** Rows that fail to decode are skipped, as in a listing, rather than blanking the inbox. */
+export function toPullRequestInbox(
+  result: typeof LenientInboxResult.Type,
+  host: string,
+): PullRequestInboxResult | null {
+  const viewer = trimmed(result.viewer.login);
+  if (viewer === null) return null;
+  const entries = (result.search.nodes ?? []).flatMap((raw) => {
+    const decoded = decodeInboxNode(raw);
+    if (!Exit.isSuccess(decoded)) return [];
+    const entry = toInboxEntry(decoded.value, host);
+    return entry === null ? [] : [entry];
+  });
+  return { viewer, entries, truncated: result.search.pageInfo.hasNextPage };
+}
 
 /** Count skipped invalid rows in rawCount to avoid ending pagination early. */
 export function toPullRequestRows(

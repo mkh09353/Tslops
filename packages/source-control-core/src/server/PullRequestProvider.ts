@@ -16,6 +16,7 @@ import type {
   PullRequestInvolvement,
   PullRequestLabel,
   PullRequestListFilters,
+  PullRequestInboxResult,
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
@@ -335,6 +336,12 @@ export interface PullRequestProviderApi {
     readonly cursor?: ProviderListCursor | undefined;
     readonly filters?: PullRequestListFilters | undefined;
   }) => Effect.Effect<ProviderBatchedChangeRequestPage, PullRequestProviderError>;
+
+  /** The viewer's own open change requests on `host`, across repositories, with review threads. */
+  readonly listViewerInbox?: (input: {
+    readonly cwd: string;
+    readonly host: string;
+  }) => Effect.Effect<PullRequestInboxResult, PullRequestProviderError>;
 
   readonly listChangeRequestStats?: (input: {
     readonly cwd: string;
