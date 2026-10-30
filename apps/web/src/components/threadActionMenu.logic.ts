@@ -14,6 +14,10 @@ export type ThreadActionMenuId =
   | "auto-settle"
   | "auto-settle:enabled"
   | "auto-settle:disabled"
+  | "collection"
+  | "collection:new"
+  | "collection:leave"
+  | `collection:join:${string}`
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
@@ -95,6 +99,14 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  /**
+   * Collections this thread can join on its server, and the one it is in.
+   * Null where the server predates collections or the surface has no list.
+   */
+  readonly collections: {
+    readonly currentKey: string | null;
+    readonly options: ReadonlyArray<{ readonly key: string; readonly title: string }>;
+  } | null;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -199,6 +211,33 @@ export function buildThreadActionMenuItems(
             label: "Turn into project",
             icon: "folder-plus",
             disabled: state.isRunning,
+          },
+        ]
+      : []),
+    ...(state.collections
+      ? [
+          {
+            id: "collection" as const,
+            label: "Collection",
+            icon: "layers",
+            children: [
+              { id: "collection:new" as const, label: "New collection from thread" },
+              ...state.collections.options.map((option, index) => ({
+                id: `collection:join:${option.key}` as const,
+                label: option.title,
+                checked: option.key === state.collections?.currentKey,
+                ...(index === 0 ? { separatorBefore: true } : {}),
+              })),
+              ...(state.collections.currentKey === null
+                ? []
+                : [
+                    {
+                      id: "collection:leave" as const,
+                      label: "Remove from collection",
+                      separatorBefore: true,
+                    },
+                  ]),
+            ],
           },
         ]
       : []),

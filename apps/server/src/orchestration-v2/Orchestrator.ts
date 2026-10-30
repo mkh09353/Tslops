@@ -497,6 +497,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.snooze":
     case "thread.unsnooze":
     case "thread.auto-settle.set":
+    case "thread.collection.set":
     case "thread.pin":
     case "thread.unpin":
     case "thread.pin.reorder":
@@ -2658,6 +2659,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       snoozedUntil: null,
       snoozedAt: null,
       lastVisitedAt: null,
+      ...(command.collection === undefined ? {} : { collection: command.collection }),
       deletedAt: null,
     };
 
@@ -2919,6 +2921,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.snooze"
           | "thread.unsnooze"
           | "thread.auto-settle.set"
+          | "thread.collection.set"
           | "thread.pin"
           | "thread.unpin"
           | "thread.pin.reorder"
@@ -3066,6 +3069,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.snooze" ||
         command.type === "thread.unsnooze" ||
         command.type === "thread.auto-settle.set" ||
+        command.type === "thread.collection.set" ||
         command.type === "thread.pin" ||
         command.type === "thread.unpin" ||
         command.type === "thread.pin.reorder" ||
@@ -3405,6 +3409,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             snoozedAt: null,
             lastSnoozeWakeAt: alreadyAwake ? thread.lastSnoozeWakeAt : now,
             updatedAt: alreadyAwake ? thread.updatedAt : now,
+          };
+        }
+        case "thread.collection.set": {
+          const current = thread.collection ?? null;
+          const unchanged =
+            current?.id === command.collection?.id && current?.title === command.collection?.title;
+          return {
+            ...thread,
+            collection: command.collection,
+            updatedAt: unchanged ? thread.updatedAt : now,
           };
         }
         case "thread.auto-settle.set": {
@@ -3820,6 +3834,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.unsnoozed" as const;
         case "thread.auto-settle.set":
           return "thread.auto-settle-set" as const;
+        case "thread.collection.set":
+          return "thread.collection-set" as const;
         case "thread.pin":
           return "thread.pinned" as const;
         case "thread.unpin":
@@ -3862,6 +3878,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
     // Archiving ends the guest share, so its waiting files go too.
     yield* releaseGuestAttachments(command, thread.guestShare, updatedThread.guestShare, effects);
+
+    if (
+      command.type === "thread.collection.set" &&
+      command.generateTitle === true &&
+      command.collection !== null
+    ) {
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:collection-title.generate`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "collection-title.generate" as const,
+            collectionId: command.collection!.id,
+          },
+        },
+      ]);
+    }
 
     if (command.type === "thread.metadata.update" && command.regenerateTitle === true) {
       yield* Ref.update(effects, (existing) => [
@@ -12674,6 +12709,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.snooze":
       case "thread.unsnooze":
       case "thread.auto-settle.set":
+      case "thread.collection.set":
       case "thread.pin":
       case "thread.unpin":
       case "thread.pin.reorder":

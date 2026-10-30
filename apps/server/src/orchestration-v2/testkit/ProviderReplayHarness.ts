@@ -53,6 +53,7 @@ import * as PreviewAgentActivity from "../../preview/PreviewAgentActivity.ts";
 import * as RunExecutionService from "../RunExecutionService.ts";
 import * as RunFinalizationService from "../RunFinalizationService.ts";
 import * as ThreadTitleRegenerationService from "../ThreadTitleRegenerationService.ts";
+import * as CollectionTitleService from "../CollectionTitleService.ts";
 import * as RuntimePolicy from "../RuntimePolicy.ts";
 import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
@@ -446,13 +447,23 @@ export function layerWithRegistry<Error>(
   const layerRunFinalizationServiceProvided = RunFinalizationService.layer.pipe(
     Layer.provide(Layer.merge(layerCheckpointCaptureServiceProvided, layerStores)),
   );
-  const layerThreadTitleRegenerationTest = Layer.succeed(
-    ThreadTitleRegenerationService.ThreadTitleRegenerationService,
-    ThreadTitleRegenerationService.ThreadTitleRegenerationService.of({
-      execute: Effect.fn("ThreadTitleRegenerationService.execute")(function () {
-        return Effect.void;
+  const layerThreadTitleRegenerationTest = Layer.merge(
+    Layer.succeed(
+      ThreadTitleRegenerationService.ThreadTitleRegenerationService,
+      ThreadTitleRegenerationService.ThreadTitleRegenerationService.of({
+        execute: Effect.fn("ThreadTitleRegenerationService.execute")(function () {
+          return Effect.void;
+        }),
       }),
-    }),
+    ),
+    Layer.succeed(
+      CollectionTitleService.CollectionTitleService,
+      CollectionTitleService.CollectionTitleService.of({
+        execute: Effect.fn("CollectionTitleService.execute")(function () {
+          return Effect.void;
+        }),
+      }),
+    ),
   );
   const layerOrchestratorProvided = Orchestrator.layer.pipe(
     Layer.provide(

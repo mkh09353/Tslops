@@ -7,6 +7,7 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 
@@ -353,6 +354,29 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           break;
         case "mark_unread":
           command = { ...common, type: "thread.mark-unread" };
+          break;
+        case "set_collection": {
+          if (input.collectionId !== undefined && input.collectionTitle === undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "set_collection with collectionId requires collectionTitle.",
+            });
+          }
+          const crypto = yield* Crypto.Crypto;
+          const id =
+            input.collectionId ?? `collection:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`;
+          command = {
+            ...common,
+            type: "thread.collection.set",
+            collection: { id, title: input.collectionTitle ?? projection.thread.title },
+            ...(input.collectionId === undefined && input.collectionTitle === undefined
+              ? { generateTitle: true }
+              : {}),
+          };
+          break;
+        }
+        case "leave_collection":
+          command = { ...common, type: "thread.collection.set", collection: null };
           break;
         default:
           command = { ...common, type: `thread.${input.action}` };

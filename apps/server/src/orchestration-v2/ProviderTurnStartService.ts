@@ -9,6 +9,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
+  type OrchestrationV2ThreadCollection,
   type OrchestrationV2TurnItem,
   isCompactionCommandMessage,
   parseGoalCommand,
@@ -61,6 +62,11 @@ import {
   restartCancelledBackgroundWorkNote,
 } from "./RestartBackgroundNote.ts";
 
+/** Tells the agent which collection its thread is in and how to reach the others. */
+function collectionNote(collection: OrchestrationV2ThreadCollection | null | undefined): string {
+  if (collection == null) return "";
+  return `This thread is part of the collection ${JSON.stringify(collection.title)}, a group of related threads the user is working on. To see the other threads in it, call t3_thread_list with collectionId ${JSON.stringify(collection.id)}, then t3_thread_read for the ones that matter.`;
+}
 export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStartError>()(
   "ProviderTurnStartError",
   {
@@ -798,6 +804,9 @@ export const layer: Layer.Layer<
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
+      const startNote = [restartNote, collectionNote(projection.thread.collection)]
+        .filter((part) => part !== "")
+        .join("\n\n");
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
       );
@@ -943,7 +952,7 @@ export const layer: Layer.Layer<
             return handoffBudget({
               tokenCap,
               modelContextWindow,
-              userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
+              userText: startNote === "" ? userText : `${startNote}\n\n${userText}`,
               attachments: message.attachments,
               providerThread: budgetProviderThread,
               nativeContextEstimate:
@@ -1419,7 +1428,8 @@ export const layer: Layer.Layer<
           });
           if (!(yield* isCurrentAttemptInStatus("running"))) return;
           const start = compact ? session.compactThread! : session.startTurn;
-          const context = [delivery.context, restartNote]
+          // Compaction gets no collection note: it is not a prompt the agent answers.
+          const context = [delivery.context, compact ? restartNote : startNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1471,7 +1481,7 @@ export const layer: Layer.Layer<
       const deliverySession =
         effectiveHandoffs.length === 0 &&
         retryHandoff.length === 0 &&
-        restartNote === "" &&
+        startNote === "" &&
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);

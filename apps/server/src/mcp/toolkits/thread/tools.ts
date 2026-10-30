@@ -31,7 +31,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
+    "Pin, snooze, settle, archive, or mark a thread unread, or move it into or out of a collection (a user-made group of related threads). Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. `set_collection` with `collectionId` and `collectionTitle` joins an existing collection (both appear on t3_thread_list items); without `collectionId` it starts a new one, titled `collectionTitle` or generated from the thread. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),
@@ -45,8 +45,12 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
       "archive",
       "unarchive",
       "mark_unread",
+      "set_collection",
+      "leave_collection",
     ]),
     snoozedUntil: Schema.optional(IsoDateTime),
+    collectionId: Schema.optional(TrimmedNonEmptyString),
+    collectionTitle: Schema.optional(TrimmedNonEmptyString),
   }),
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,

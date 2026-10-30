@@ -771,6 +771,7 @@ function listItemFromShell(
     interactionMode: shell.interactionMode,
     linkedPullRequest: shell.linkedPullRequest ?? null,
     pullRequests: threadPullRequests(shell.pullRequests),
+    collection: shell.collection ?? null,
     ...threadSettlement(shell),
     ...threadSnooze(shell, nowMs),
     parentThreadId: shell.lineage.parentThreadId,
@@ -2768,9 +2769,11 @@ const make = Effect.gen(function* () {
     ),
     listThreads: Effect.fn("OrchestratorMcpService.listThreads")(function* (scope, input) {
       const { parent } = yield* loadCaller(scope);
-      const projectId = input.allProjects
-        ? null
-        : yield* resolveProjectTarget(parent, input.projectId);
+      // Collections span projects, so a collection lists from every project.
+      const projectId =
+        input.allProjects || input.collectionId !== undefined
+          ? null
+          : yield* resolveProjectTarget(parent, input.projectId);
       const projectThreads = yield* threadManagement
         .listProjectThreads({
           projectId: projectId ?? undefined,
@@ -2785,6 +2788,10 @@ const make = Effect.gen(function* () {
       const statuses = input.statuses === undefined ? null : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
       const filtered = projectThreads
+        .filter(
+          (thread) =>
+            input.collectionId === undefined || thread.collection?.id === input.collectionId,
+        )
         .filter(
           (thread) => statuses === null || statuses.has(thread.activityRunStatus ?? thread.status),
         )

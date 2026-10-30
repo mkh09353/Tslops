@@ -147,6 +147,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
         linkedContext: input.linkedContext,
         attachments: input.attachments,
         instructions: input.instructions,
+        subject: input.subject,
       }),
     });
     return {

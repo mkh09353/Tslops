@@ -21,6 +21,11 @@ import {
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
+import {
+  readSidebarCollections,
+  resolveThreadCollectionMenuAction,
+  threadCollectionMenuState,
+} from "../components/Sidebar.collections";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
@@ -30,6 +35,7 @@ import { readEnvironmentScope } from "../state/session";
 import {
   readEnvironmentServerConfigLoaded,
   readEnvironmentSupportsAutoSettleOptOut,
+  readEnvironmentSupportsCollections,
   readThreadShell,
   useProjects,
 } from "../state/entities";
@@ -82,6 +88,7 @@ export function useThreadActionMenu(input: {
     pinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadCollection,
     archiveThread,
     deleteThread,
     markThreadUnread,
@@ -132,6 +139,7 @@ export function useThreadActionMenu(input: {
       };
       const isRegeneratingTitle = thread.titleRegeneration != null;
       const snoozePresets = resolveSnoozePresets(now, timestampFormat, threadRef.environmentId);
+      const collections = readSidebarCollections();
       const items = buildThreadActionMenuItems({
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
         canFind: onFind !== undefined,
@@ -148,6 +156,11 @@ export function useThreadActionMenu(input: {
         snoozePresets,
         canShareWithGuest,
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+        collections: threadCollectionMenuState(
+          thread,
+          collections,
+          readEnvironmentSupportsCollections(threadRef.environmentId),
+        ),
       });
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
@@ -188,6 +201,15 @@ export function useThreadActionMenu(input: {
           failureToast(title, squashAtomCommandFailure(result));
         }
       };
+      if (action.startsWith("collection:join:")) {
+        const change = resolveThreadCollectionMenuAction(action, thread, collections);
+        if (change) {
+          await reportFailure("Failed to update collection", () =>
+            setThreadCollection(threadRef, change.collection),
+          );
+        }
+        return;
+      }
       switch (action) {
         case "find":
           onFind?.(threadRef);
@@ -246,6 +268,16 @@ export function useThreadActionMenu(input: {
         case "rename":
           onStartRename();
           return;
+        case "collection:new":
+        case "collection:leave": {
+          const change = resolveThreadCollectionMenuAction(action, thread, collections);
+          if (change) {
+            await reportFailure("Failed to update collection", () =>
+              setThreadCollection(threadRef, change.collection, change),
+            );
+          }
+          return;
+        }
         case "regenerate-title":
           if (isRegeneratingTitle) return;
           await reportFailure("Failed to regenerate thread title", () =>

@@ -777,6 +777,7 @@ export function applyToProjection(
     case "thread.snoozed":
     case "thread.unsnoozed":
     case "thread.auto-settle-set":
+    case "thread.collection-set":
     case "thread.pinned":
     case "thread.unpinned":
     case "thread.pin-reordered":
@@ -1549,6 +1550,7 @@ export function threadShellFromProjection(
     pinnedAt: projection.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
+    collection: projection.thread.collection ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     lastVisitedAt: projection.thread.lastVisitedAt,
     opens: projection.thread.opens ?? null,
@@ -1815,6 +1817,7 @@ function shellFromState(input: {
     pinnedAt: input.state.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
+    collection: input.state.thread.collection ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     lastVisitedAt: input.state.thread.lastVisitedAt,
     opens: input.state.thread.opens ?? null,
@@ -1870,6 +1873,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "thread.snoozed":
             case "thread.unsnoozed":
             case "thread.auto-settle-set":
+            case "thread.collection-set":
             case "thread.pinned":
             case "thread.unpinned":
             case "thread.pin-reordered":
@@ -2676,6 +2680,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.snoozed" &&
             event.type !== "thread.unsnoozed" &&
             event.type !== "thread.auto-settle-set" &&
+            event.type !== "thread.collection-set" &&
             event.type !== "thread.pinned" &&
             event.type !== "thread.unpinned" &&
             event.type !== "thread.pin-reordered" &&

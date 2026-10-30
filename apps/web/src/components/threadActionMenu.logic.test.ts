@@ -23,6 +23,7 @@ const baseState: ThreadActionMenuState = {
   snoozePresets: [
     { id: "hour", label: "In 1 hour", whenLabel: "3:00 PM", snoozedUntil: "2026-08-07T15:00:00Z" },
   ],
+  collections: null,
 };
 
 describe("buildThreadActionMenuItems", () => {

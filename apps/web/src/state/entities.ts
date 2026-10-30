@@ -21,6 +21,7 @@ import type { ScopedProjectRef, ScopedThreadRef } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ThreadCollection,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   ThreadId,
@@ -37,6 +38,7 @@ import {
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 import { waitForAtomValue } from "./waitForAtomValue";
+import { useUiStateStore } from "../uiStateStore";
 
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_VISIBLE_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = Object.freeze([]);
@@ -319,6 +321,39 @@ export function readEnvironmentSupportsAutoSettleOptOut(environmentId: Environme
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadAutoSettleOptOut === true
   );
+}
+
+export function readEnvironmentSupportsCollections(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadCollections === true
+  );
+}
+
+/**
+ * The collection a new thread in `environmentId` joins: the one the sidebar
+ * is narrowed to, with its current title. Null when none applies.
+ */
+export function readScopedCollectionForNewThread(
+  environmentId: EnvironmentId,
+): OrchestrationV2ThreadCollection | null {
+  const scopeKey = useUiStateStore.getState().sidebarCollectionScopeKey;
+  if (scopeKey === null || !readEnvironmentSupportsCollections(environmentId)) return null;
+  let latest: { collection: OrchestrationV2ThreadCollection; updatedAt: string } | null = null;
+  for (const thread of appAtomRegistry.get(environmentThreadShells.threadShellsAtom)) {
+    const collection = thread.collection;
+    if (
+      collection == null ||
+      thread.environmentId !== environmentId ||
+      `${environmentId}:${collection.id}` !== scopeKey
+    ) {
+      continue;
+    }
+    if (latest === null || thread.updatedAt > latest.updatedAt) {
+      latest = { collection, updatedAt: thread.updatedAt };
+    }
+  }
+  return latest?.collection ?? null;
 }
 
 export function readEnvironmentThreadRefs(

@@ -64,6 +64,8 @@ export interface ThreadTitleGenerationInput {
   forkSource?: ThreadTitleForkSource | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   instructions?: string | undefined;
+  /** Names the collection a thread starts instead of the thread itself. */
+  subject?: "thread" | "collection" | undefined;
   modelSelection: ModelSelection;
 }
 

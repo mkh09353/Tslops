@@ -38,6 +38,8 @@ export interface ThreadContextDragGhost {
   readonly y: number;
   readonly title: string;
   readonly count: number;
+  /** What releasing here does, when it is not a composer drop. */
+  readonly action?: string;
 }
 
 let ghost: ThreadContextDragGhost | null = null;
@@ -72,7 +74,7 @@ function findDropTarget(point: { x: number; y: number }): HTMLElement | null {
 
 export function moveThreadContextDrag(
   point: { x: number; y: number },
-  label: { title: string; count: number },
+  label: { title: string; count: number; action?: string },
 ) {
   const target = findDropTarget(point);
   if (target !== overTarget) {

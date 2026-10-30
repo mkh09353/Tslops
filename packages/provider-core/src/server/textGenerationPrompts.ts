@@ -353,6 +353,8 @@ export interface ThreadTitlePromptInput {
   forkSource?: ThreadTitleForkSource | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   instructions?: string | undefined;
+  /** Names the collection a thread starts instead of the thread itself. */
+  subject?: "thread" | "collection" | undefined;
 }
 
 /** The thread a fork branched from, and its conversation up to the fork point. */
@@ -360,6 +362,14 @@ export interface ThreadTitleForkSource {
   title: string;
   history: string;
 }
+
+const COLLECTION_TITLE_PROMPT = `Name a new collection in T3 Code. A collection groups the threads that belong to one larger effort, such as a product, feature area, or initiative. It starts from the thread below; more threads will join it.
+Return JSON with keys title and needsRefinement. Set needsRefinement to false.
+
+Name the broader effort this thread is part of, not the thread's single task.
+- One to four words, Title Case, no trailing punctuation.
+- Prefer the product or feature noun ("Intake Forms", "Voice Billing") over a verb phrase.
+- Do not mention threads, collections, models, tools, branch names, or pull request numbers.`;
 
 // Keep shared editorial rules in these two prompts in sync.
 const INITIAL_THREAD_TITLE_PROMPT = `Generate a title that will help the user recognize this T3 Code thread weeks later.
@@ -465,7 +475,9 @@ function threadTitlePromptSuffix(input: ThreadTitlePromptInput): string {
 
 export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
   let prompt: string;
-  if (input.previousTitle === undefined) {
+  if (input.subject === "collection") {
+    prompt = `${COLLECTION_TITLE_PROMPT}\n\nThread contents:\n${preserveMessageEnd(input.message)}${threadTitlePromptSuffix(input)}`;
+  } else if (input.previousTitle === undefined) {
     const message = limitTitleMessage(input.message, 8_000);
     const label = input.forkSource === undefined ? "User message" : "User message after the fork";
     prompt = `${INITIAL_THREAD_TITLE_PROMPT}${forkSourceSection(input.forkSource)}\n\n${label}:\n${message}${threadTitlePromptSuffix(input)}`;

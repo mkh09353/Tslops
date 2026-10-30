@@ -242,6 +242,7 @@ import {
   usePrimaryEnvironment,
 } from "../state/environments";
 import {
+  readScopedCollectionForNewThread,
   resolveThreadDetailRef,
   useEnvironmentSupportsServerBrowser,
   useProject,
@@ -382,6 +383,11 @@ const EMPTY_TURN_ITEMS: ThreadStructure["turnItems"] = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+/** New threads join the collection the sidebar is narrowed to. */
+function scopedCollectionField(environmentId: EnvironmentId) {
+  const collection = readScopedCollectionForNewThread(environmentId);
+  return collection === null ? {} : { collection };
+}
 
 type ChatViewProps =
   | {

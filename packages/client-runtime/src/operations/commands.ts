@@ -150,6 +150,7 @@ interface StartThreadBootstrap {
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
+    readonly collection?: import("@t3tools/contracts").OrchestrationV2ThreadCollection;
   };
   readonly prepareWorktree?: {
     readonly requireWorktree?: boolean;
@@ -504,6 +505,23 @@ export const setThreadAutoSettle = Effect.fn("EnvironmentCommands.setThreadAutoS
   });
 });
 
+export interface SetThreadCollectionInput extends ThreadCommandInput {
+  readonly collection: import("@t3tools/contracts").OrchestrationV2ThreadCollection | null;
+  /** Names a new collection from this thread once it commits. */
+  readonly generateTitle?: boolean;
+}
+export const setThreadCollection = Effect.fn("EnvironmentCommands.setThreadCollection")(function* (
+  input: SetThreadCollectionInput,
+) {
+  return yield* dispatch({
+    type: "thread.collection.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    collection: input.collection,
+    ...(input.generateTitle === true ? { generateTitle: true } : {}),
+  });
+});
+
 export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedThread")(function* (
   input: ReorderPinnedThreadInput,
 ) {
@@ -704,6 +722,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
       workspaceStrategy,
+      ...(bootstrap?.collection === undefined ? {} : { collection: bootstrap.collection }),
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,

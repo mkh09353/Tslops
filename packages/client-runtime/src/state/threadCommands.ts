@@ -19,6 +19,7 @@ import {
 } from "./runtime.ts";
 import {
   type InterruptThreadTurnInput,
+  type SetThreadCollectionInput,
   archiveThread,
   closeGuestShare,
   resolveGuestMessage,
@@ -44,6 +45,7 @@ import {
   reorderPinnedThread,
   reorderActiveThread,
   setThreadAutoSettle,
+  setThreadCollection,
   settleThread,
   snoozeThread,
   startThreadTurn,
@@ -199,6 +201,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     setAutoSettle: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-auto-settle",
       execute: setThreadAutoSettle,
+      scheduler,
+      concurrency,
+    }),
+    setCollection: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-collection",
+      execute: (input: SetThreadCollectionInput) => setThreadCollection(input),
       scheduler,
       concurrency,
     }),
@@ -413,6 +421,10 @@ export function createThreadEnvironmentAtoms<R, E>(
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),
+    })),
+    setCollection: optimistic.wrap(commands.setCollection, (thread, input) => ({
+      ...thread,
+      collection: input.collection,
     })),
     pin: optimistic.wrap(commands.pin, (thread, input, now) => ({
       ...thread,

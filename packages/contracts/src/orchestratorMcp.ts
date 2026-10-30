@@ -38,6 +38,7 @@ import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
   OrchestrationV2RunStatus,
+  OrchestrationV2ThreadCollection,
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
 import { ProviderOptionSelection, ProviderOptionSelectionValue } from "./model.ts";
@@ -331,6 +332,12 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   environmentId: OrchestratorMcpEnvironmentTarget,
   projectId: OrchestratorMcpProjectTarget,
   allProjects: Schema.optional(Schema.Boolean),
+  collectionId: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "List the threads in this collection across every project instead of one project's threads. projectId is ignored.",
+    }),
+  ),
   statuses: Schema.optional(
     Schema.Array(OrchestratorMcpThreadStatus).check(Schema.isMaxLength(10)),
   ),
@@ -367,6 +374,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
   pullRequests: Schema.optional(Schema.Array(OrchestratorMcpThreadPullRequest)),
+  /** The user-made group this thread belongs to; list its threads with collectionId. */
+  collection: Schema.NullOr(OrchestrationV2ThreadCollection),
   settled: Schema.Boolean,
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
@@ -380,7 +389,7 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
 export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem.Type;
 
 export const OrchestratorMcpThreadListResult = Schema.Struct({
-  /** null with `allProjects`. */
+  /** null with `allProjects` or `collectionId`. */
   projectId: Schema.NullOr(ProjectId),
   currentThreadId: Schema.NullOr(ThreadId),
   threads: Schema.Array(OrchestratorMcpThreadListItem),

@@ -137,8 +137,10 @@ import {
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
+  readEnvironmentSupportsCollections,
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
+  useAllEnvironmentShellsBootstrapped,
   useDelegatedUnderParent,
   useProjects,
   useServerConfigs,
@@ -241,6 +243,22 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import {
+  LEAVE_COLLECTION_DROP_TARGET,
+  NEW_COLLECTION_DROP_TARGET,
+  NewCollectionDropSlot,
+  SidebarCollectionScopeHeader,
+  SidebarCollections,
+  collectionDropTargetAt,
+} from "./sidebar/SidebarCollections";
+import {
+  groupSidebarCollections,
+  isThreadInSidebarCollection,
+  newSidebarCollectionId,
+  resolveThreadCollectionMenuAction,
+  threadCollectionMenuState,
+  type SidebarCollection,
+} from "./Sidebar.collections";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
@@ -317,6 +335,7 @@ const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
+const COLLECTIONS_EXPANDED_KEY = "t3code:sidebar:collections-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 
@@ -336,6 +355,8 @@ type SidebarOptimisticDrop = {
 interface SidebarThreadPartitionInput {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly scopedProjectKeys: ReadonlySet<string> | null;
+  /** Narrows the list to one collection, across projects; overrides the project scope. */
+  readonly collectionScopeKey: string | null;
   /** Tasks linked environments run for a listed thread; they show under it. */
   readonly delegatedUnderParent: ReadonlySet<string>;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
@@ -398,6 +419,7 @@ function routeThreadOnly(
 function useSidebarThreads(input: {
   readonly projectScopeKey: string | null;
   readonly scopedProjectKeys: ReadonlySet<string> | null;
+  readonly collectionScopeKey: string | null;
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
@@ -411,6 +433,7 @@ function useSidebarThreads(input: {
   const {
     projectScopeKey,
     scopedProjectKeys,
+    collectionScopeKey,
     serverConfigs,
     optimisticDrop,
     threads,
@@ -460,6 +483,7 @@ function useSidebarThreads(input: {
   const partition = partitionSidebarThreads({
     threads,
     scopedProjectKeys,
+    collectionScopeKey,
     delegatedUnderParent,
     serverConfigs,
     optimisticDrop,
@@ -595,6 +619,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   const {
     threads,
     scopedProjectKeys,
+    collectionScopeKey,
     delegatedUnderParent,
     serverConfigs,
     optimisticDrop,
@@ -602,7 +627,12 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     sortActiveBySend,
   } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
+  const visible =
+    collectionScopeKey === null
+      ? filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent)
+      : filterSidebarV2VisibleThreads(threads, null, delegatedUnderParent).filter((thread) =>
+          isThreadInSidebarCollection(thread, collectionScopeKey),
+        );
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -901,6 +931,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     unpinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadCollection,
     turnThreadIntoProject,
     reorderPinnedThread,
     reorderActiveThread,
@@ -1028,6 +1059,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     readonly activationY: number | null;
     readonly targetSection: SidebarSection | null;
     readonly contextDrag: boolean;
+    /** The collection row (or new/leave slot) under the pointer. */
+    readonly collectionTarget: string | null;
   } | null>(null);
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
   const contextDragKeyRef = useRef<string | null>(null);
@@ -1070,6 +1103,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  // Collections group threads across projects. Narrowing to one replaces the
+  // project scope while it lasts, and new threads sent meanwhile join it.
+  const collectionScopeKey = useUiStateStore((store) => store.sidebarCollectionScopeKey);
+  const setCollectionScopeKey = useUiStateStore((store) => store.setSidebarCollectionScopeKey);
+  const collections = groupSidebarCollections(threads);
+  const collectionsRef = useRef(collections);
+  const scopedCollection =
+    collectionScopeKey === null
+      ? null
+      : (collections.find((collection) => collection.key === collectionScopeKey) ?? null);
+  const [collectionsExpanded, setCollectionsExpanded] = useLocalStorage(
+    COLLECTIONS_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
+  const [renamingCollectionKey, setRenamingCollectionKey] = useState<string | null>(null);
+  const allShellsBootstrapped = useAllEnvironmentShellsBootstrapped();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- an emptied collection stops existing, so its persisted scope is cleared once every server's shells are in
+  useEffect(() => {
+    if (collectionScopeKey !== null && allShellsBootstrapped && scopedCollection === null) {
+      setCollectionScopeKey(null);
+    }
+  }, [allShellsBootstrapped, collectionScopeKey, scopedCollection, setCollectionScopeKey]);
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1274,8 +1330,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     pinnedKeysById,
     activeKeysById,
   } = useSidebarThreads({
-    projectScopeKey,
+    projectScopeKey: collectionScopeKey ?? projectScopeKey,
     scopedProjectKeys,
+    collectionScopeKey,
     serverConfigs,
     optimisticDrop,
     threads,
@@ -1684,11 +1741,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return bounds !== undefined && (point.x < bounds.left || point.x > bounds.right);
   };
   const moveThreadContextDrag = (point: { x: number; y: number }) => {
-    const contextDrag = pointerOutsideThreadList(point);
+    // Over a collection the gesture files the thread instead of sorting it,
+    // so the row settles back and a labelled ghost follows the pointer.
+    const collectionTarget = collectionDropTargetAt(point);
+    const contextDrag = collectionTarget !== null || pointerOutsideThreadList(point);
     setDragState((current) =>
-      current === null || current.contextDrag === contextDrag
+      current === null ||
+      (current.contextDrag === contextDrag && current.collectionTarget === collectionTarget)
         ? current
-        : { ...current, contextDrag },
+        : { ...current, contextDrag, collectionTarget },
     );
     if (!contextDrag) {
       endThreadContextDrag();
@@ -1697,10 +1758,100 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const threads = contextDragThreads();
     const title =
       threadByKeyRef.current.get(contextDragKeyRef.current ?? "")?.title.trim() || "Thread";
-    moveThreadContextDragGhost(point, { title, count: threads.length });
+    const action =
+      collectionTarget === null
+        ? null
+        : collectionTarget === NEW_COLLECTION_DROP_TARGET
+          ? "New collection"
+          : collectionTarget === LEAVE_COLLECTION_DROP_TARGET
+            ? "Remove from collection"
+            : `Add to ${
+                collectionsRef.current.find((collection) => collection.key === collectionTarget)
+                  ?.title ?? "collection"
+              }`;
+    moveThreadContextDragGhost(point, {
+      title,
+      count: threads.length,
+      ...(action === null ? {} : { action }),
+    });
     return true;
   };
+  const dropThreadsOnCollection = (target: string, refs: ReadonlyArray<ScopedThreadRef>) => {
+    const dropped = refs.flatMap((ref) => {
+      const thread = threadByKeyRef.current.get(scopedThreadKey(ref));
+      return thread ? [thread] : [];
+    });
+    const first = dropped[0];
+    if (first === undefined) return;
+    const existing =
+      target === NEW_COLLECTION_DROP_TARGET || target === LEAVE_COLLECTION_DROP_TARGET
+        ? null
+        : (collectionsRef.current.find((collection) => collection.key === target) ?? null);
+    if (
+      existing === null &&
+      target !== NEW_COLLECTION_DROP_TARGET &&
+      target !== LEAVE_COLLECTION_DROP_TARGET
+    ) {
+      return;
+    }
+    // A collection lives on one server; threads elsewhere cannot join it.
+    const environmentId = existing?.environmentId ?? first.environmentId;
+    const eligible = dropped.filter((thread) => thread.environmentId === environmentId);
+    if (!readEnvironmentSupportsCollections(environmentId)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Collections unavailable",
+          description: "Update the T3 Code server on this machine to use collections.",
+        }),
+      );
+      return;
+    }
+    if (!checkThreadOperations(eligible)) return;
+    const collection =
+      target === LEAVE_COLLECTION_DROP_TARGET
+        ? null
+        : existing !== null
+          ? { id: existing.id, title: existing.title }
+          : { id: newSidebarCollectionId(), title: first.title.trim() || "New collection" };
+    if (eligible.length < dropped.length) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title: "Some threads stayed put",
+          description: "A collection only holds threads from one machine.",
+        }),
+      );
+    }
+    void (async () => {
+      for (const [index, thread] of eligible.entries()) {
+        const result = await setThreadCollection(
+          scopeThreadRef(thread.environmentId, thread.id),
+          collection,
+          { generateTitle: target === NEW_COLLECTION_DROP_TARGET && index === 0 },
+        );
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to update collection",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return;
+        }
+      }
+    })();
+  };
   const dropThreadContextDrag = (point: { x: number; y: number }) => {
+    const collectionTarget = collectionDropTargetAt(point);
+    if (collectionTarget !== null) {
+      dropThreadsOnCollection(collectionTarget, contextDragThreads());
+      return true;
+    }
     if (!pointerOutsideThreadList(point)) return false;
     dropThreadContext(point, contextDragThreads());
     return true;
@@ -1717,6 +1868,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const sectionByThreadKeyRef = useRef(sectionByThreadKey);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed list data to refs read by stable drag and sweep callbacks
   useLayoutEffect(() => {
+    collectionsRef.current = collections;
     projectGroupsRef.current = projectGroups;
     orderedThreadKeysRef.current = orderedThreadKeys;
     threadByKeyRef.current = threadByKey;
@@ -1842,6 +1994,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       activeSection,
       targetSection: activeSection,
       contextDrag: false,
+      collectionTarget: null,
       occurredAt: new Date().toISOString(),
       activationY:
         event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
@@ -2572,12 +2725,40 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 titleRegeneration: configLoaded,
               },
               snoozePresets,
+              collections: threadCollectionMenuState(
+                thread,
+                collectionsRef.current,
+                readEnvironmentSupportsCollections(thread.environmentId),
+              ),
             }),
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
+        const collectionChange = resolveThreadCollectionMenuAction(
+          clicked.value,
+          thread,
+          collectionsRef.current,
+        );
+        if (collectionChange !== null) {
+          const result = await setThreadCollection(
+            threadRef,
+            collectionChange.collection,
+            collectionChange,
+          );
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to update collection",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return;
+        }
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
@@ -2889,6 +3070,92 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     shortcutLabelForCommand(keybindings, "chat.new") ??
     (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+
+  const collectionMembers = (collection: SidebarCollection) =>
+    threads.filter((thread) => isThreadInSidebarCollection(thread, collection.key));
+  /** Applies one collection change to every member, stopping at the first failure. */
+  const updateCollectionMembers = async (
+    collection: SidebarCollection,
+    next: { readonly id: string; readonly title: string } | null,
+    failureTitle: string,
+  ) => {
+    const members = collectionMembers(collection);
+    if (!checkThreadOperations(members)) return;
+    for (const thread of members) {
+      const result = await setThreadCollection(
+        scopeThreadRef(thread.environmentId, thread.id),
+        next,
+      );
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: failureTitle,
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+    }
+  };
+  const renameCollection = (collection: SidebarCollection, title: string) => {
+    setRenamingCollectionKey(null);
+    const trimmed = title.trim();
+    if (trimmed === "" || trimmed === collection.title) return;
+    void updateCollectionMembers(
+      collection,
+      { id: collection.id, title: trimmed },
+      "Failed to rename collection",
+    );
+  };
+  // New threads in a collection start in the project its latest thread uses,
+  // and join the collection on send because the list stays narrowed to it.
+  const startThreadInCollection = (collection: SidebarCollection) => {
+    const latest = collectionMembers(collection).reduce<EnvironmentThreadShell | null>(
+      (best, thread) => (best === null || thread.updatedAt > best.updatedAt ? thread : best),
+      null,
+    );
+    setCollectionScopeKey(collection.key);
+    if (isMobile) setOpenMobile(false);
+    if (latest === null) return;
+    void handleNewThread(scopeProjectRef(latest.environmentId, latest.projectId));
+  };
+  const handleCollectionContextMenu = (
+    collection: SidebarCollection,
+    position: { x: number; y: number },
+  ) => {
+    void (async () => {
+      const api = readLocalApi();
+      if (!api) return;
+      const clicked = await settlePromise(() =>
+        api.contextMenu.show(
+          [
+            { id: "new-thread", label: "New thread in collection", icon: "message-square-plus" },
+            { id: "rename", label: "Rename collection", icon: "pencil" },
+            { id: "ungroup", label: "Ungroup threads", icon: "layers", separatorBefore: true },
+          ] as const,
+          position,
+        ),
+      );
+      if (clicked._tag === "Failure" || clicked.value === null) return;
+      switch (clicked.value) {
+        case "new-thread":
+          startThreadInCollection(collection);
+          return;
+        case "rename":
+          setRenamingCollectionKey(collection.key);
+          return;
+        case "ungroup":
+          if (collectionScopeKey === collection.key) setCollectionScopeKey(null);
+          await updateCollectionMembers(collection, null, "Failed to ungroup threads");
+          return;
+      }
+    })();
+  };
+
   return (
     <>
       <ThreadContextDragGhost />
@@ -2897,6 +3164,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
+            {/* While a thread is lifted the search row yields to the new
+                collection slot; it stays mounted so its refs and state hold. */}
+            {dragState !== null ? (
+              <div className="absolute inset-x-(--sidebar-content-inset) top-(--sidebar-content-inset) z-[1] rounded-md bg-sidebar">
+                <NewCollectionDropSlot
+                  isDropTarget={dragState.collectionTarget === NEW_COLLECTION_DROP_TARGET}
+                />
+              </div>
+            ) : null}
             <SidebarThreadHeader
               searchFieldRef={headerSearchRef}
               hasProjects={projectGroups.length > 0}
@@ -3164,6 +3440,32 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               closeDelay={0}
               timeout={400}
             >
+              {scopedCollection !== null ? (
+                <SidebarCollectionScopeHeader
+                  collection={scopedCollection}
+                  dragging={dragState !== null}
+                  dropTarget={dragState?.collectionTarget ?? null}
+                  onExit={() => setCollectionScopeKey(null)}
+                  onNewThread={() => startThreadInCollection(scopedCollection)}
+                  onContextMenu={handleCollectionContextMenu}
+                  renaming={renamingCollectionKey === scopedCollection.key}
+                  onRename={renameCollection}
+                  onCancelRename={() => setRenamingCollectionKey(null)}
+                />
+              ) : (
+                <SidebarCollections
+                  collections={collections}
+                  expanded={collectionsExpanded}
+                  onToggle={() => setCollectionsExpanded((value) => !value)}
+                  dragging={dragState !== null}
+                  dropTarget={dragState?.collectionTarget ?? null}
+                  renamingKey={renamingCollectionKey}
+                  onSelect={(collection) => setCollectionScopeKey(collection.key)}
+                  onContextMenu={handleCollectionContextMenu}
+                  onRename={renameCollection}
+                  onCancelRename={() => setRenamingCollectionKey(null)}
+                />
+              )}
               <DndContext
                 sensors={dndSensors}
                 autoScroll={!isContextDrag}
@@ -3278,6 +3580,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               projectDisplayNameByKey.get(
                                 `${thread.environmentId}:${thread.projectId}`,
                               ) ?? null
+                            }
+                            collectionTitle={
+                              collectionScopeKey === null
+                                ? (thread.collection?.title ?? null)
+                                : null
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??

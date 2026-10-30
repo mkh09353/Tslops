@@ -12,6 +12,7 @@ import {
   AuthSourceControlWriteScope,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  type OrchestrationV2ThreadCollection,
   type ScopedThreadRef,
   ThreadId,
   sessionGrantsScope,
@@ -279,6 +280,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const setThreadAutoSettleMutation = useOrchestrationCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
+  const setThreadCollectionMutation = useOrchestrationCommand(threadEnvironment.setCollection, {
     reportFailure: false,
   });
   const reorderPinnedThreadMutation = useOrchestrationCommand(threadEnvironment.reorderPin, {
@@ -629,6 +633,21 @@ export function useThreadActions() {
     return deleteResult;
   };
 
+  /** Moves a thread into a collection, or out of one with null. */
+  const setThreadCollection = (
+    target: ScopedThreadRef,
+    collection: OrchestrationV2ThreadCollection | null,
+    opts: { generateTitle?: boolean } = {},
+  ) =>
+    setThreadCollectionMutation({
+      environmentId: target.environmentId,
+      input: {
+        threadId: target.threadId,
+        collection,
+        ...(opts.generateTitle === true ? { generateTitle: true } : {}),
+      },
+    });
+
   const unsettleThread = async (target: ScopedThreadRef) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
@@ -943,6 +962,7 @@ export function useThreadActions() {
     reorderActiveThread,
     markThreadUnread,
     setThreadAutoSettle,
+    setThreadCollection,
     turnThreadIntoProject: (target: ScopedThreadRef) =>
       createProjectFromThread({
         environmentId: target.environmentId,

@@ -433,6 +433,16 @@ const LenientThreadOpens = Schema.NullOr(OrchestrationV2ThreadOpens).pipe(
   Schema.catchDecoding(() => Effect.succeedSome(null)),
 );
 
+/**
+ * A user-made group of threads, independent of project or folder. Threads
+ * carry their collection directly; a collection exists while a thread is in it.
+ */
+export const OrchestrationV2ThreadCollection = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+});
+export type OrchestrationV2ThreadCollection = typeof OrchestrationV2ThreadCollection.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -480,6 +490,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Omitted by servers that predate thread collections. */
+  collection: Schema.optional(Schema.NullOr(OrchestrationV2ThreadCollection)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
@@ -1841,6 +1853,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.unsnoozed",
       "thread.pinned",
       "thread.auto-settle-set",
+      "thread.collection-set",
       "thread.unpinned",
       "thread.pin-reordered",
       "thread.active-reordered",
@@ -2094,6 +2107,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Omitted by servers that predate thread collections. */
+  collection: Schema.optional(Schema.NullOr(OrchestrationV2ThreadCollection)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2720,6 +2735,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.unsnoozed",
       "thread.pinned",
       "thread.auto-settle-set",
+      "thread.collection-set",
       "thread.unpinned",
       "thread.pin-reordered",
       "thread.active-reordered",
@@ -2876,6 +2892,7 @@ export const OrchestrationV2Command = Schema.Union([
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
     delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
+    collection: Schema.optional(OrchestrationV2ThreadCollection),
     importedNativeThread: Schema.optional(
       Schema.Struct({
         ref: Schema.Struct({
@@ -2950,6 +2967,18 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     enabled: Schema.Boolean,
+  }),
+  /**
+   * Moves a thread into a collection, or out of one with null. Renaming a
+   * collection sets the new title on each member. `generateTitle` names a new
+   * collection from this thread once the move commits.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.collection.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    collection: Schema.NullOr(OrchestrationV2ThreadCollection),
+    generateTitle: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pin"),
@@ -3575,6 +3604,8 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  /** Starts the thread inside an existing collection. */
+  collection: Schema.optional(OrchestrationV2ThreadCollection),
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),

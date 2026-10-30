@@ -48,6 +48,7 @@ import {
   Undo2Icon,
   UserRoundIcon,
   XIcon,
+  LayersIcon,
 } from "lucide-react";
 import {
   memo,
@@ -562,6 +563,8 @@ type SidebarThreadRowProps = {
   scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
+  /** Shown beside the project while the list is not narrowed to that collection. */
+  collectionTitle: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -1429,13 +1432,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {pinIndicator}
               {props.projectDisplayName ? (
                 <span
-                  className={cn("min-w-0 flex-1 truncate font-normal text-secondary-label text-xs")}
+                  className={cn(
+                    "min-w-0 truncate font-normal text-secondary-label text-xs",
+                    props.collectionTitle ? "shrink" : "flex-1",
+                  )}
                 >
                   {props.projectDisplayName}
                 </span>
-              ) : (
+              ) : props.collectionTitle ? null : (
                 <span className="flex-1" />
               )}
+              {props.collectionTitle ? (
+                <span className="inline-flex min-w-0 flex-1 items-center gap-1 text-xs text-secondary-label/80">
+                  <LayersIcon aria-hidden className="size-3 shrink-0" />
+                  <span className="truncate">{props.collectionTitle}</span>
+                </span>
+              ) : null}
               {sortable?.isDragging ? (
                 dragDestination
               ) : (

@@ -155,6 +155,27 @@ right-click it, to start a thread in that project. Pinned threads stay above the
 Snoozed and Settled stay below them. In this mode you cannot drag threads, and the Working section
 is off. Each device keeps its own choice.
 
+## Group threads into collections
+
+A collection groups the threads for one larger piece of work, such as a new
+feature, even when they span several projects. On web and desktop, drag a thread
+onto **New collection** at the top of the sidebar to start one. T3 Code names it
+from that thread; right-click the collection to rename it. Drag more threads
+onto a collection to add them, or use **Collection** in a thread's menu. With
+several threads selected, dragging moves them all.
+
+Click a collection to show only its threads. Pinned, Active, and Settled still
+apply inside it, so finished threads settle without leaving the collection.
+While the list shows a collection, new threads you send join it; use the pen
+button beside its name to start one. Drag a thread onto the collection's name
+to take it out, and click the arrow to go back to all threads. **Ungroup
+threads** in a collection's menu removes the collection and keeps its threads.
+
+Agents in a collection thread are told which collection they are in and can
+list and read the other threads in it. A collection holds threads from one
+machine. Collections need an updated T3 Code server and are not yet shown in
+the mobile app.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list
